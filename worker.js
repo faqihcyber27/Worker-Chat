@@ -388,7 +388,6 @@ async function getChats(request, env) {
   let data = await env.DB.prepare(`
     SELECT 
   chats.*,
-
   (
     SELECT COUNT(*) 
     FROM messages 
@@ -401,7 +400,6 @@ async function getChats(request, env) {
     AND messages.sender != ?
     AND messages.is_read = 0
   ) as unread,
-
   (
     SELECT text 
     FROM messages m2 
@@ -413,7 +411,6 @@ async function getChats(request, env) {
       END
     ORDER BY m2.created_at DESC LIMIT 1
   ) as last_message,
-
   (
     SELECT file_type 
     FROM messages m2 
@@ -423,9 +420,8 @@ async function getChats(request, env) {
         THEN chats.user1 || '_' || chats.user2
         ELSE chats.user2 || '_' || chats.user1
       END
-    ORDER BY m2.created_at DESC LIMIT 1
+    ORDER BY m2.id DESC LIMIT 1
   ) as last_file_type,
-
   (
     SELECT file_name 
     FROM messages m2 
@@ -435,7 +431,7 @@ async function getChats(request, env) {
         THEN chats.user1 || '_' || chats.user2
         ELSE chats.user2 || '_' || chats.user1
       END
-    ORDER BY m2.created_at DESC LIMIT 1
+    ORDER BY m2.id DESC LIMIT 1
   ) as last_file_name
 
 FROM chats
