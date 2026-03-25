@@ -6,3 +6,11 @@ compatibility_date = "2024-01-01"
 binding = "DB"
 database_name = "chat_app"
 database_id = "ed599f5e-f277-4794-af43-c577669edb7b"
+
+[[durable_objects.bindings]]
+name = "CHAT_ROOM"
+class_name = "ChatRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatRoom"]
