@@ -54,10 +54,27 @@ export class ChatRoom {
       if (u1 > u2) [u1, u2] = [u2, u1]
 
       await this.env.DB.prepare(`
-        INSERT INTO messages (room, sender, text, created_at, is_read)
-VALUES (?, ?, ?, ?, 0)
+        INSERT INTO messages (
+  room,
+  sender,
+  text,
+  file,
+  file_name,
+  file_type,
+  created_at,
+  is_read
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, 0)
       `)
-      .bind(data.room, data.sender, data.text, now)
+      .bind(
+  data.room,
+  data.sender,
+  data.text || null,
+  data.file || null,
+  data.file_name || null,
+  data.file_type || null,
+  now
+)
       .run()
 
       await this.env.DB.prepare(`
@@ -71,9 +88,19 @@ VALUES (?, ?, ?, ?, 0)
       .bind(u1, u2, data.text, now)
       .run()
 
-      for (const s of this.sessions) {
-        s.send(JSON.stringify(data))
-      }
+      const payload = {
+  room: data.room,
+  sender: data.sender,
+  text: data.text || null,
+  file: data.file || null,
+  file_name: data.file_name || null,
+  file_type: data.file_type || null,
+  created_at: now
+}
+
+for (const s of this.sessions) {
+  s.send(JSON.stringify(payload))
+}
     })
 
     server.addEventListener("close", () => {
