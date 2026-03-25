@@ -1,7 +1,57 @@
+export class ChatRoom {
+  constructor(state, env) {
+    this.sessions = new Set()
+    this.env = env
+  }
+
+  async fetch(request) {
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return new Response("Expected websocket", { status: 400 })
+    }
+
+    const pair = new WebSocketPair()
+    const [client, server] = Object.values(pair)
+
+    server.accept()
+    this.sessions.add(server)
+
+    server.addEventListener("message", async (event) => {
+      const data = JSON.parse(event.data)
+
+      // simpan ke DB
+      await this.env.DB.prepare(`
+        INSERT INTO messages (user, message, created_at)
+        VALUES (?, ?, ?)
+      `)
+      .bind(data.user, data.text, new Date().toISOString())
+      .run()
+
+      // broadcast
+      for (const s of this.sessions) {
+        s.send(JSON.stringify(data))
+      }
+    })
+
+    server.addEventListener("close", () => {
+      this.sessions.delete(server)
+    })
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client
+    })
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
 
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: cors() })
+    }
+
+    // AUTH
     if (request.method === "POST" && url.pathname === "/register") {
       return register(request, env)
     }
@@ -10,11 +60,26 @@ export default {
       return login(request, env)
     }
 
+    // GET CHAT HISTORY
+    if (url.pathname === "/messages") {
+      const data = await env.DB.prepare(`
+        SELECT * FROM messages ORDER BY id ASC LIMIT 50
+      `).all()
+
+      return json(data.results)
+    }
+
+    // WEBSOCKET
+    if (url.pathname === "/ws") {
+      const id = env.CHAT_ROOM.idFromName("global")
+      return env.CHAT_ROOM.get(id).fetch(request)
+    }
+
     return new Response("Not found", { status: 404 })
   }
 }
 
-// 🔐 hash password
+// ===== AUTH =====
 async function hash(password) {
   const data = new TextEncoder().encode(password)
   const hashBuffer = await crypto.subtle.digest("SHA-256", data)
@@ -23,10 +88,8 @@ async function hash(password) {
     .join("")
 }
 
-// 📝 REGISTER
 async function register(request, env) {
   const { name, email, password } = await request.json()
-
   const hashed = await hash(password)
 
   try {
@@ -38,21 +101,18 @@ async function register(request, env) {
     .run()
 
     return json({ success: true })
-  } catch (e) {
+  } catch {
     return json({ error: "Email sudah terdaftar" }, 400)
   }
 }
 
-// 🔑 LOGIN
 async function login(request, env) {
   const { email, password } = await request.json()
   const hashed = await hash(password)
 
   const user = await env.DB.prepare(`
     SELECT * FROM users WHERE email = ?
-  `)
-  .bind(email)
-  .first()
+  `).bind(email).first()
 
   if (!user || user.password !== hashed) {
     return json({ error: "Login gagal" }, 401)
@@ -61,23 +121,29 @@ async function login(request, env) {
   const token = btoa(email + ":" + Date.now())
 
   return json({
-    success: true,
     token,
     user: {
-      id: user.id,
       name: user.name,
       email: user.email
     }
   })
 }
 
-// helper
+// ===== HELPERS =====
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*"
+      ...cors(),
+      "Content-Type": "application/json"
     }
   })
+}
+
+function cors() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "*"
+  }
 }
