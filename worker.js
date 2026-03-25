@@ -6,26 +6,29 @@ export default {
       return new Response(null, { headers: cors() })
     }
 
-    // AUTH
+    // ===== AUTH =====
     if (url.pathname === "/register") return register(request, env)
     if (url.pathname === "/login") return login(request, env)
 
-    // FRIEND REQUEST
+    // ===== FRIEND REQUEST =====
     if (url.pathname === "/send-request") return sendRequest(request, env)
     if (url.pathname === "/requests") return getRequests(request, env)
     if (url.pathname === "/respond-request") return respondRequest(request, env)
 
-    // CONTACT
+    // ===== CONTACT =====
     if (url.pathname === "/contacts") return getContacts(request, env)
+    if (url.pathname === "/delete-contact") return deleteContact(request, env)
 
-    // CHAT LIST
+    // ===== CHAT LIST =====
     if (url.pathname === "/chats") return getChats(request, env)
 
     return new Response("Not found", { status: 404 })
   }
 }
 
+//
 // ===== AUTH =====
+//
 async function hash(password) {
   const data = new TextEncoder().encode(password)
   const hashBuffer = await crypto.subtle.digest("SHA-256", data)
@@ -66,11 +69,16 @@ async function login(request, env) {
 
   return json({
     token: btoa(email),
-    user: { name: user.name, email: user.email }
+    user: {
+      name: user.name,
+      email: user.email
+    }
   })
 }
 
+//
 // ===== FRIEND REQUEST =====
+//
 async function sendRequest(request, env) {
   const { from_email, to_email } = await request.json()
 
@@ -106,7 +114,7 @@ async function respondRequest(request, env) {
     SELECT * FROM contact_requests WHERE id=?
   `).bind(id).first()
 
-  if (!req) return json({ error: "Not found" }, 404)
+  if (!req) return json({ error: "Request tidak ditemukan" }, 404)
 
   if (action === "accept") {
     await env.DB.prepare(`
@@ -134,7 +142,9 @@ async function respondRequest(request, env) {
   return json({ success: true })
 }
 
+//
 // ===== CONTACT =====
+//
 async function getContacts(request, env) {
   const email = new URL(request.url).searchParams.get("email")
 
@@ -150,7 +160,25 @@ async function getContacts(request, env) {
   return json(data.results)
 }
 
+async function deleteContact(request, env) {
+  const { user_email, friend_email } = await request.json()
+
+  await env.DB.prepare(`
+    DELETE FROM contacts 
+    WHERE user_email=? AND friend_email=?
+  `).bind(user_email, friend_email).run()
+
+  await env.DB.prepare(`
+    DELETE FROM contacts 
+    WHERE user_email=? AND friend_email=?
+  `).bind(friend_email, user_email).run()
+
+  return json({ success: true })
+}
+
+//
 // ===== CHAT LIST =====
+//
 async function getChats(request, env) {
   const email = new URL(request.url).searchParams.get("email")
 
@@ -163,7 +191,9 @@ async function getChats(request, env) {
   return json(data.results)
 }
 
+//
 // ===== HELPERS =====
+//
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
