@@ -82,6 +82,10 @@ async function login(request, env) {
 async function sendRequest(request, env) {
   const { from_email, to_email } = await request.json()
 
+  if (!from_email || !to_email) {
+    return json({ error: "Data tidak lengkap" }, 400)
+  }
+
   if (from_email === to_email) {
     return json({ error: "Tidak bisa add diri sendiri" }, 400)
   }
@@ -121,7 +125,7 @@ async function respondRequest(request, env) {
       UPDATE contact_requests SET status='accepted' WHERE id=?
     `).bind(id).run()
 
-    // insert 2 arah
+    // insert dua arah
     await env.DB.prepare(`
       INSERT INTO contacts (user_email, friend_email, created_at)
       VALUES (?, ?, ?)
@@ -160,18 +164,24 @@ async function getContacts(request, env) {
   return json(data.results)
 }
 
+//
+// 🔥 DELETE CONTACT (FIXED VERSION)
+//
 async function deleteContact(request, env) {
   const { user_email, friend_email } = await request.json()
 
-  await env.DB.prepare(`
-    DELETE FROM contacts 
-    WHERE user_email=? AND friend_email=?
-  `).bind(user_email, friend_email).run()
+  if (!user_email || !friend_email) {
+    return json({ error: "Data tidak lengkap" }, 400)
+  }
 
+  // DELETE dua arah + ignore case
   await env.DB.prepare(`
     DELETE FROM contacts 
-    WHERE user_email=? AND friend_email=?
-  `).bind(friend_email, user_email).run()
+    WHERE (LOWER(user_email)=LOWER(?) AND LOWER(friend_email)=LOWER(?))
+       OR (LOWER(user_email)=LOWER(?) AND LOWER(friend_email)=LOWER(?))
+  `)
+  .bind(user_email, friend_email, friend_email, user_email)
+  .run()
 
   return json({ success: true })
 }
