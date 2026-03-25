@@ -381,16 +381,17 @@ async function getChats(request, env) {
       ) as unread
 
   -- 🔥 TAMBAHAN INI
-  (
-    SELECT file_type FROM messages m2 
-    WHERE m2.room =
-      CASE 
-        WHEN chats.user1 < chats.user2 
-        THEN chats.user1 || '_' || chats.user2
-        ELSE chats.user2 || '_' || chats.user1
-      END
-    ORDER BY id DESC LIMIT 1
-  ) as last_file_type
+    (
+  SELECT file_type 
+  FROM messages m2 
+  WHERE m2.room =
+    CASE 
+      WHEN chats.user1 < chats.user2 
+      THEN chats.user1 || '_' || chats.user2
+      ELSE chats.user2 || '_' || chats.user1
+    END
+  ORDER BY m2.created_at DESC LIMIT 1
+) as last_file_type
   
     FROM chats
     WHERE user1 = ? OR user2 = ?
