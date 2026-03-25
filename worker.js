@@ -378,7 +378,7 @@ async function getChats(request, env) {
           END
         AND messages.sender != ?
         AND messages.is_read = 0
-      ) as unread
+      ) as unread,
     (
   SELECT COALESCE(file_type, '') 
   FROM messages m2 
