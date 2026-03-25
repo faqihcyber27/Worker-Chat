@@ -272,7 +272,6 @@ async function deleteContact(request, env) {
 async function getChats(request, env) {
   const email = new URL(request.url).searchParams.get("email")
 
-  // ambil dari chats dulu
   let data = await env.DB.prepare(`
     SELECT * FROM chats
     WHERE user1 = ? OR user2 = ?
@@ -281,10 +280,9 @@ async function getChats(request, env) {
   .bind(email, email)
   .all()
 
-  // 🔥 kalau kosong → fallback ke messages
+  // 🔥 fallback kalau kosong
   if (!data.results.length) {
-
-    const fallback = await env.DB.prepare(`
+    data = await env.DB.prepare(`
       SELECT 
         room,
         MAX(created_at) as updated_at,
@@ -302,11 +300,28 @@ async function getChats(request, env) {
     `)
     .bind(email)
     .all()
-
-    return json(fallback.results)
   }
 
-  return json(data.results)
+  // 🔥 MAP KE NAMA
+  const result = await Promise.all(data.results.map(async (c) => {
+
+    const friendEmail =
+      c.user1 === email ? c.user2 : c.user1
+
+    const user = await env.DB.prepare(`
+      SELECT name FROM users WHERE email = ?
+    `)
+    .bind(friendEmail)
+    .first()
+
+    return {
+      ...c,
+      friend_email: friendEmail,
+      friend_name: user?.name || friendEmail
+    }
+  }))
+
+  return json(result)
 }
 
 // ================= HELPER =================
