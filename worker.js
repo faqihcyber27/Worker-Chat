@@ -72,7 +72,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 0)
   data.text || null,
   data.file || null,
   data.file_name || null,
-  data.file_type || null,
+  data.file_type || "file",
   now
 )
       .run()
