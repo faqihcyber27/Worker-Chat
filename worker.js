@@ -1,6 +1,7 @@
-// ================= DURABLE OBJECT =================
+// ================= DO CLASS =================
 export class ChatRoom {
   constructor(state, env) {
+    this.state = state
     this.env = env
     this.sessions = new Set()
   }
@@ -20,20 +21,19 @@ export class ChatRoom {
       const data = JSON.parse(event.data)
       const now = new Date().toISOString()
 
-      // 🔥 FIX: NORMALIZE ROOM DULU
+      // 🔥 NORMALIZE USER PAIR (TAMBAHAN)
       let [u1, u2] = data.room.split("_")
       if (u1 > u2) [u1, u2] = [u2, u1]
-      const room = `${u1}_${u2}`
 
-      // ===== SAVE MESSAGE =====
+      // ===== SIMPAN MESSAGE (TETAP PUNYA KAMU)
       await this.env.DB.prepare(`
-        INSERT INTO messages (room, sender, text, created_at, is_read)
-        VALUES (?, ?, ?, ?, 0)
+        INSERT INTO messages (room, sender, text, created_at)
+        VALUES (?, ?, ?, ?)
       `)
-      .bind(room, data.sender, data.text, now)
+      .bind(data.room, data.sender, data.text, now)
       .run()
 
-      // ===== UPSERT CHAT =====
+      // 🔥 TAMBAHAN: UPDATE CHAT LIST
       await this.env.DB.prepare(`
         INSERT INTO chats (user1, user2, last_message, updated_at)
         VALUES (?, ?, ?, ?)
@@ -45,15 +45,9 @@ export class ChatRoom {
       .bind(u1, u2, data.text, now)
       .run()
 
-      // ===== BROADCAST =====
-      const payload = JSON.stringify({
-        room,
-        sender: data.sender,
-        text: data.text
-      })
-
+      // ===== BROADCAST (TETAP)
       for (const s of this.sessions) {
-        s.send(payload)
+        s.send(JSON.stringify(data))
       }
     })
 
@@ -68,7 +62,7 @@ export class ChatRoom {
   }
 }
 
-// ================= MAIN WORKER =================
+// ================= MAIN =================
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
@@ -80,17 +74,20 @@ export default {
     // ===== WEBSOCKET =====
     if (url.pathname === "/ws") {
       const room = url.searchParams.get("room")
+
       const id = env.CHAT_ROOM.idFromName(room)
-      return env.CHAT_ROOM.get(id).fetch(request)
+      const obj = env.CHAT_ROOM.get(id)
+
+      return obj.fetch(request)
     }
 
-    // ===== GET MESSAGE HISTORY =====
+    // ===== GET CHAT HISTORY =====
     if (url.pathname === "/messages") {
       const room = url.searchParams.get("room")
 
       const data = await env.DB.prepare(`
         SELECT * FROM messages
-        WHERE LOWER(room) = LOWER(?)
+        WHERE room = ?
         ORDER BY id ASC
       `)
       .bind(room)
@@ -99,62 +96,177 @@ export default {
       return json(data.results)
     }
 
-    // ===== MARK AS READ =====
-    if (url.pathname === "/mark-read") {
-      const { room, user } = await request.json()
+    // ===== AUTH =====
+    if (url.pathname === "/register") return register(request, env)
+    if (url.pathname === "/login") return login(request, env)
 
-      await env.DB.prepare(`
-        UPDATE messages
-        SET is_read = 1
-        WHERE LOWER(room) = LOWER(?) AND sender != ?
-      `)
-      .bind(room, user)
-      .run()
+    // ===== FRIEND REQUEST =====
+    if (url.pathname === "/send-request") return sendRequest(request, env)
+    if (url.pathname === "/requests") return getRequests(request, env)
+    if (url.pathname === "/respond-request") return respondRequest(request, env)
 
-      return json({ success: true })
-    }
+    // ===== CONTACT =====
+    if (url.pathname === "/contacts") return getContacts(request, env)
+    if (url.pathname === "/delete-contact") return deleteContact(request, env)
 
-    // ===== GET CHATS + UNREAD =====
-    if (url.pathname === "/chats") {
-      const email = url.searchParams.get("email")
+    // ===== CHAT LIST =====
+    if (url.pathname === "/chats") return getChats(request, env)
 
-      const data = await env.DB.prepare(`
-        SELECT 
-          chats.*,
-          (
-            SELECT COUNT(*) FROM messages 
-            WHERE LOWER(room) = LOWER(chats.user1 || '_' || chats.user2)
-            AND sender != ?
-            AND is_read = 0
-          ) as unread
-        FROM chats
-        WHERE user1 = ? OR user2 = ?
-        ORDER BY updated_at DESC
-      `)
-      .bind(email, email, email)
-      .all()
-
-      return json(data.results)
-    }
-
-    // ===== CONTACTS =====
-    if (url.pathname === "/contacts") {
-      const email = url.searchParams.get("email")
-
-      const data = await env.DB.prepare(`
-        SELECT users.name, users.email
-        FROM contacts
-        JOIN users ON users.email = contacts.friend_email
-        WHERE contacts.user_email = ?
-      `)
-      .bind(email)
-      .all()
-
-      return json(data.results)
-    }
-
-    return new Response("OK")
+    return new Response("Not found", { status: 404 })
   }
+}
+
+// ================= AUTH =================
+async function hash(password) {
+  const data = new TextEncoder().encode(password)
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data)
+  return [...new Uint8Array(hashBuffer)]
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("")
+}
+
+async function register(request, env) {
+  const { name, email, password } = await request.json()
+  const hashed = await hash(password)
+
+  try {
+    await env.DB.prepare(`
+      INSERT INTO users (name, email, password, created_at)
+      VALUES (?, ?, ?, ?)
+    `)
+    .bind(name, email, hashed, new Date().toISOString())
+    .run()
+
+    return json({ success: true })
+  } catch {
+    return json({ error: "Email sudah terdaftar" }, 400)
+  }
+}
+
+async function login(request, env) {
+  const { email, password } = await request.json()
+  const hashed = await hash(password)
+
+  const user = await env.DB.prepare(`
+    SELECT * FROM users WHERE email = ?
+  `).bind(email).first()
+
+  if (!user || user.password !== hashed) {
+    return json({ error: "Login gagal" }, 401)
+  }
+
+  return json({
+    token: btoa(email),
+    user: { name: user.name, email: user.email }
+  })
+}
+
+// ================= FRIEND REQUEST =================
+async function sendRequest(request, env) {
+  const { from_email, to_email } = await request.json()
+
+  if (from_email === to_email) {
+    return json({ error: "Tidak bisa add diri sendiri" }, 400)
+  }
+
+  await env.DB.prepare(`
+    INSERT INTO contact_requests (from_email, to_email, status, created_at)
+    VALUES (?, ?, 'pending', ?)
+  `)
+  .bind(from_email, to_email, new Date().toISOString())
+  .run()
+
+  return json({ success: true })
+}
+
+async function getRequests(request, env) {
+  const email = new URL(request.url).searchParams.get("email")
+
+  const data = await env.DB.prepare(`
+    SELECT * FROM contact_requests
+    WHERE to_email = ? AND status='pending'
+  `).bind(email).all()
+
+  return json(data.results)
+}
+
+async function respondRequest(request, env) {
+  const { id, action } = await request.json()
+
+  const req = await env.DB.prepare(`
+    SELECT * FROM contact_requests WHERE id=?
+  `).bind(id).first()
+
+  if (!req) return json({ error: "Not found" }, 404)
+
+  if (action === "accept") {
+    await env.DB.prepare(`
+      UPDATE contact_requests SET status='accepted' WHERE id=?
+    `).bind(id).run()
+
+    await env.DB.prepare(`
+      INSERT INTO contacts (user_email, friend_email, created_at)
+      VALUES (?, ?, ?)
+    `).bind(req.from_email, req.to_email, new Date().toISOString()).run()
+
+    await env.DB.prepare(`
+      INSERT INTO contacts (user_email, friend_email, created_at)
+      VALUES (?, ?, ?)
+    `).bind(req.to_email, req.from_email, new Date().toISOString()).run()
+  }
+
+  if (action === "reject") {
+    await env.DB.prepare(`
+      UPDATE contact_requests SET status='rejected' WHERE id=?
+    `).bind(id).run()
+  }
+
+  return json({ success: true })
+}
+
+// ================= CONTACT =================
+async function getContacts(request, env) {
+  const email = new URL(request.url).searchParams.get("email")
+
+  const data = await env.DB.prepare(`
+    SELECT users.name, users.email
+    FROM contacts
+    JOIN users ON users.email = contacts.friend_email
+    WHERE contacts.user_email = ?
+  `)
+  .bind(email)
+  .all()
+
+  return json(data.results)
+}
+
+async function deleteContact(request, env) {
+  const { user_email, friend_email } = await request.json()
+
+  await env.DB.prepare(`
+    DELETE FROM contacts 
+    WHERE (LOWER(user_email)=LOWER(?) AND LOWER(friend_email)=LOWER(?))
+       OR (LOWER(user_email)=LOWER(?) AND LOWER(friend_email)=LOWER(?))
+  `)
+  .bind(user_email, friend_email, friend_email, user_email)
+  .run()
+
+  return json({ success: true })
+}
+
+// ================= CHAT LIST =================
+async function getChats(request, env) {
+  const email = new URL(request.url).searchParams.get("email")
+
+  const data = await env.DB.prepare(`
+    SELECT * FROM chats
+    WHERE user1 = ? OR user2 = ?
+    ORDER BY updated_at DESC
+  `)
+  .bind(email, email)
+  .all()
+
+  return json(data.results)
 }
 
 // ================= HELPER =================
@@ -171,7 +283,7 @@ function json(data, status = 200) {
 function cors() {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS"
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "*"
   }
 }
