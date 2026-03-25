@@ -259,23 +259,21 @@ async function getChats(request, env) {
 
   const data = await env.DB.prepare(`
     SELECT 
-      chats.*,
-      users.name as friend_name,
+      room,
+      MAX(created_at) as updated_at,
+      SUBSTR(room, INSTR(room, '_')+1) as user2,
+      SUBSTR(room, 1, INSTR(room, '_')-1) as user1,
       (
-        SELECT COUNT(*) FROM messages 
-        WHERE room = chats.user1 || '_' || chats.user2
-        AND sender != ?
-      ) as unread
-    FROM chats
-    LEFT JOIN users 
-      ON users.email = CASE 
-        WHEN chats.user1 = ? THEN chats.user2 
-        ELSE chats.user1 
-      END
-    WHERE chats.user1 = ? OR chats.user2 = ?
-    ORDER BY chats.updated_at DESC
+        SELECT text FROM messages m2 
+        WHERE m2.room = m1.room 
+        ORDER BY id DESC LIMIT 1
+      ) as last_message
+    FROM messages m1
+    WHERE room LIKE '%' || ? || '%'
+    GROUP BY room
+    ORDER BY updated_at DESC
   `)
-  .bind(email, email, email, email)
+  .bind(email)
   .all()
 
   return json(data.results)
