@@ -1,7 +1,6 @@
-// ================= DO CLASS =================
+// ================= DURABLE OBJECT =================
 export class ChatRoom {
   constructor(state, env) {
-    this.state = state
     this.env = env
     this.sessions = new Set()
   }
@@ -19,16 +18,33 @@ export class ChatRoom {
 
     server.addEventListener("message", async (event) => {
       const data = JSON.parse(event.data)
+      const now = new Date().toISOString()
 
-      // simpan ke DB
+      // ===== SAVE MESSAGE =====
       await this.env.DB.prepare(`
-        INSERT INTO messages (room, sender, text, created_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO messages (room, sender, text, created_at, is_read)
+        VALUES (?, ?, ?, ?, 0)
       `)
-      .bind(data.room, data.sender, data.text, new Date().toISOString())
+      .bind(data.room, data.sender, data.text, now)
       .run()
 
-      // broadcast ke semua user di room
+      // ===== NORMALIZE USER PAIR =====
+      let [u1, u2] = data.room.split("_")
+      if (u1 > u2) [u1, u2] = [u2, u1]
+
+      // ===== UPSERT CHAT =====
+      await this.env.DB.prepare(`
+        INSERT INTO chats (user1, user2, last_message, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user1, user2)
+        DO UPDATE SET
+          last_message = excluded.last_message,
+          updated_at = excluded.updated_at
+      `)
+      .bind(u1, u2, data.text, now)
+      .run()
+
+      // ===== BROADCAST =====
       for (const s of this.sessions) {
         s.send(JSON.stringify(data))
       }
@@ -45,7 +61,7 @@ export class ChatRoom {
   }
 }
 
-// ================= MAIN =================
+// ================= MAIN WORKER =================
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
@@ -54,17 +70,14 @@ export default {
       return new Response(null, { headers: cors() })
     }
 
-    // ===== WEBSOCKET (NEW) =====
+    // ===== WEBSOCKET =====
     if (url.pathname === "/ws") {
       const room = url.searchParams.get("room")
-
       const id = env.CHAT_ROOM.idFromName(room)
-      const obj = env.CHAT_ROOM.get(id)
-
-      return obj.fetch(request)
+      return env.CHAT_ROOM.get(id).fetch(request)
     }
 
-    // ===== GET CHAT HISTORY =====
+    // ===== GET MESSAGE HISTORY =====
     if (url.pathname === "/messages") {
       const room = url.searchParams.get("room")
 
@@ -74,6 +87,44 @@ export default {
         ORDER BY id ASC
       `)
       .bind(room)
+      .all()
+
+      return json(data.results)
+    }
+
+    // ===== MARK AS READ =====
+    if (url.pathname === "/mark-read") {
+      const { room, user } = await request.json()
+
+      await env.DB.prepare(`
+        UPDATE messages
+        SET is_read = 1
+        WHERE room = ? AND sender != ?
+      `)
+      .bind(room, user)
+      .run()
+
+      return json({ success: true })
+    }
+
+    // ===== GET CHATS (WITH UNREAD) =====
+    if (url.pathname === "/chats") {
+      const email = url.searchParams.get("email")
+
+      const data = await env.DB.prepare(`
+        SELECT 
+          chats.*,
+          (
+            SELECT COUNT(*) FROM messages 
+            WHERE room = chats.user1 || '_' || chats.user2
+            AND sender != ?
+            AND is_read = 0
+          ) as unread
+        FROM chats
+        WHERE user1 = ? OR user2 = ?
+        ORDER BY updated_at DESC
+      `)
+      .bind(email, email, email)
       .all()
 
       return json(data.results)
@@ -91,9 +142,6 @@ export default {
     // ===== CONTACT =====
     if (url.pathname === "/contacts") return getContacts(request, env)
     if (url.pathname === "/delete-contact") return deleteContact(request, env)
-
-    // ===== CHAT LIST =====
-    if (url.pathname === "/chats") return getChats(request, env)
 
     return new Response("Not found", { status: 404 })
   }
@@ -168,7 +216,9 @@ async function getRequests(request, env) {
   const data = await env.DB.prepare(`
     SELECT * FROM contact_requests
     WHERE to_email = ? AND status='pending'
-  `).bind(email).all()
+  `)
+  .bind(email)
+  .all()
 
   return json(data.results)
 }
@@ -187,6 +237,7 @@ async function respondRequest(request, env) {
       UPDATE contact_requests SET status='accepted' WHERE id=?
     `).bind(id).run()
 
+    // insert dua arah
     await env.DB.prepare(`
       INSERT INTO contacts (user_email, friend_email, created_at)
       VALUES (?, ?, ?)
@@ -237,20 +288,7 @@ async function deleteContact(request, env) {
   return json({ success: true })
 }
 
-// ================= CHAT LIST =================
-async function getChats(request, env) {
-  const email = new URL(request.url).searchParams.get("email")
-
-  const data = await env.DB.prepare(`
-    SELECT * FROM chats
-    WHERE user1 = ? OR user2 = ?
-    ORDER BY updated_at DESC
-  `).bind(email, email).all()
-
-  return json(data.results)
-}
-
-// ================= HELPERS =================
+// ================= HELPER =================
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -264,7 +302,7 @@ function json(data, status = 200) {
 function cors() {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "*"
+    "Access-Control-Allow-Headers": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS"
   }
 }
