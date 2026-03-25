@@ -107,7 +107,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 0)
           last_message = excluded.last_message,
           updated_at = excluded.updated_at
       `)
-      .bind(u1, u2, data.text, now)
+      .bind(
+        u1,
+        u2,
+        data.text || (data.file ? "📷 Foto" : null),
+        now
+        )
       .run()
 
       const payload = {
