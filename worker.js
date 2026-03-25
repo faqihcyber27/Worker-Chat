@@ -63,14 +63,26 @@ export class ChatRoom {
 
   // ================= 🔥 ONLINE =================
   if (data.type === "online") {
-    for (const s of this.sessions) {
-      s.send(JSON.stringify({
-        type: "online",
-        user: data.user
-      }))
-    }
-    return
+  const payload = {
+    type: "online",
+    user: data.user
   }
+
+  for (const s of this.sessions) {
+    s.send(JSON.stringify(payload))
+  }
+
+  // kirim ke GLOBAL
+  const globalId = this.env.CHAT_ROOM.idFromName("global")
+  const globalRoom = this.env.CHAT_ROOM.get(globalId)
+
+  await globalRoom.fetch(new Request("https://internal", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  }))
+
+  return
+}
 
       let [u1, u2] = data.room.split("_")
       if (u1 > u2) [u1, u2] = [u2, u1]
@@ -94,26 +106,31 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 0)
   data.text || null,
   data.file || null,
   data.file_name || null,
-  data.file_type || "file",
+  data.file_type || (data.file ? "file" : null),
   now
 )
       .run()
 
-      await this.env.DB.prepare(`
-        INSERT INTO chats (user1, user2, last_message, updated_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(user1, user2)
-        DO UPDATE SET
-          last_message = excluded.last_message,
-          updated_at = excluded.updated_at
-      `)
-      .bind(
-        u1,
-        u2,
-        data.text || (data.file ? "📷 Foto" : null),
-        now
-        )
-      .run()
+      const lastMsg =
+  data.text ||
+  (data.file_type?.includes("image")
+    ? "📷 Foto"
+    : data.file_type
+    ? "📎 File"
+    : data.file
+    ? "📎 File"
+    : "No message")
+
+await this.env.DB.prepare(`
+  INSERT INTO chats (user1, user2, last_message, updated_at)
+  VALUES (?, ?, ?, ?)
+  ON CONFLICT(user1, user2)
+  DO UPDATE SET
+    last_message = excluded.last_message,
+    updated_at = excluded.updated_at
+`)
+.bind(u1, u2, lastMsg, now)
+.run()
 
       const payload = {
   room: data.room,
@@ -405,17 +422,6 @@ async function getChats(request, env) {
     AND messages.sender != ?
     AND messages.is_read = 0
   ) as unread,
-  (
-    SELECT text 
-    FROM messages m2 
-    WHERE m2.room =
-      CASE 
-        WHEN chats.user1 < chats.user2 
-        THEN chats.user1 || '_' || chats.user2
-        ELSE chats.user2 || '_' || chats.user1
-      END
-    ORDER BY m2.created_at DESC LIMIT 1
-  ) as last_message,
   (
     SELECT file_type 
     FROM messages m2 
