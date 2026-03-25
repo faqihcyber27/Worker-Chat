@@ -25,8 +25,8 @@ export class ChatRoom {
       if (u1 > u2) [u1, u2] = [u2, u1]
 
       await this.env.DB.prepare(`
-        INSERT INTO messages (room, sender, text, created_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO messages (room, sender, text, created_at, is_read)
+VALUES (?, ?, ?, ?, 0)
       `)
       .bind(data.room, data.sender, data.text, now)
       .run()
@@ -101,6 +101,7 @@ export default {
     if (url.pathname === "/delete-contact") return deleteContact(request, env)
 
     if (url.pathname === "/chats") return getChats(request, env)
+    if (url.pathname === "/mark-read") return markRead(request, env)
 
     return new Response("Not found", { status: 404 })
   }
@@ -273,14 +274,29 @@ async function getChats(request, env) {
   const email = new URL(request.url).searchParams.get("email")
 
   let data = await env.DB.prepare(`
-    SELECT * FROM chats
+    SELECT 
+      chats.*,
+
+      (
+        SELECT COUNT(*) 
+        FROM messages 
+        WHERE messages.room =
+          CASE 
+            WHEN chats.user1 < chats.user2 
+            THEN chats.user1 || '_' || chats.user2
+            ELSE chats.user2 || '_' || chats.user1
+          END
+        AND messages.sender != ?
+        AND messages.is_read = 0
+      ) as unread
+
+    FROM chats
     WHERE user1 = ? OR user2 = ?
     ORDER BY updated_at DESC
   `)
-  .bind(email, email)
+  .bind(email, email, email)
   .all()
 
-  // 🔥 fallback kalau kosong
   if (!data.results.length) {
     data = await env.DB.prepare(`
       SELECT 
@@ -300,6 +316,22 @@ async function getChats(request, env) {
     `)
     .bind(email)
     .all()
+  }
+
+  // Mark Read
+  async function markRead(request, env) {
+  const { room, user } = await request.json()
+
+  await env.DB.prepare(`
+    UPDATE messages
+    SET is_read = 1
+    WHERE room = ?
+    AND sender != ?
+  `)
+  .bind(room, user)
+  .run()
+
+  return json({ success: true })
   }
 
   // 🔥 MAP KE NAMA
