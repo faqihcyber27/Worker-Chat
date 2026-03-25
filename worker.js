@@ -23,13 +23,20 @@ export class ChatRoom {
 
   // ================= 🔥 TYPING =================
   if (data.type === "typing") {
-    for (const s of this.sessions) {
-      s.send(JSON.stringify({
-        type: "typing",
-        sender: data.sender
-      }))
-    }
-    return
+
+  // 🔥 ambil nama user
+  const user = await this.env.DB.prepare(`
+    SELECT name FROM users WHERE email = ?
+  `).bind(data.sender).first()
+
+  for (const s of this.sessions) {
+    s.send(JSON.stringify({
+      type: "typing",
+      sender: data.sender,
+      name: user?.name || data.sender
+    }))
+  }
+  return
   }
 
   // ================= 🔥 ONLINE =================
