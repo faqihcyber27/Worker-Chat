@@ -60,7 +60,16 @@ export default {
       return login(request, env)
     }
 
-    // GET CHAT HISTORY
+    // CONTACT
+    if (request.method === "POST" && url.pathname === "/add-friend") {
+      return addFriend(request, env)
+    }
+
+    if (url.pathname === "/contacts") {
+      return getContacts(request, env)
+    }
+
+    // CHAT HISTORY
     if (url.pathname === "/messages") {
       const data = await env.DB.prepare(`
         SELECT * FROM messages ORDER BY id ASC LIMIT 50
@@ -118,15 +127,55 @@ async function login(request, env) {
     return json({ error: "Login gagal" }, 401)
   }
 
-  const token = btoa(email + ":" + Date.now())
-
   return json({
-    token,
+    token: btoa(email),
     user: {
       name: user.name,
       email: user.email
     }
   })
+}
+
+// ===== CONTACT =====
+async function addFriend(request, env) {
+  const { user_email, friend_email } = await request.json()
+
+  if (user_email === friend_email) {
+    return json({ error: "Tidak bisa add diri sendiri" }, 400)
+  }
+
+  const friend = await env.DB.prepare(`
+    SELECT * FROM users WHERE email = ?
+  `).bind(friend_email).first()
+
+  if (!friend) {
+    return json({ error: "User tidak ditemukan" }, 404)
+  }
+
+  await env.DB.prepare(`
+    INSERT INTO contacts (user_email, friend_email, created_at)
+    VALUES (?, ?, ?)
+  `)
+  .bind(user_email, friend_email, new Date().toISOString())
+  .run()
+
+  return json({ success: true })
+}
+
+async function getContacts(request, env) {
+  const url = new URL(request.url)
+  const email = url.searchParams.get("email")
+
+  const data = await env.DB.prepare(`
+    SELECT users.name, users.email
+    FROM contacts
+    JOIN users ON users.email = contacts.friend_email
+    WHERE contacts.user_email = ?
+  `)
+  .bind(email)
+  .all()
+
+  return json(data.results)
 }
 
 // ===== HELPERS =====
