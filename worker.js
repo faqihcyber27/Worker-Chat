@@ -88,6 +88,7 @@ export default {
     }
 
     // 🔥 TAMBAHAN (AMAN)
+    if (url.pathname === "/mark-read") return markRead(request, env)
     if (url.pathname === "/delete-chat") return deleteChat(request, env)
 
     if (url.pathname === "/register") return register(request, env)
@@ -101,7 +102,6 @@ export default {
     if (url.pathname === "/delete-contact") return deleteContact(request, env)
 
     if (url.pathname === "/chats") return getChats(request, env)
-    if (url.pathname === "/mark-read") return markRead(request, env)
 
     return new Response("Not found", { status: 404 })
   }
