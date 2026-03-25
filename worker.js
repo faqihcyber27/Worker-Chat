@@ -18,8 +18,30 @@ export class ChatRoom {
     this.sessions.add(server)
 
     server.addEventListener("message", async (event) => {
-      const data = JSON.parse(event.data)
-      const now = new Date().toISOString()
+  const data = JSON.parse(event.data)
+  const now = new Date().toISOString()
+
+  // ================= 🔥 TYPING =================
+  if (data.type === "typing") {
+    for (const s of this.sessions) {
+      s.send(JSON.stringify({
+        type: "typing",
+        sender: data.sender
+      }))
+    }
+    return
+  }
+
+  // ================= 🔥 ONLINE =================
+  if (data.type === "online") {
+    for (const s of this.sessions) {
+      s.send(JSON.stringify({
+        type: "online",
+        user: data.user
+      }))
+    }
+    return
+  }
 
       let [u1, u2] = data.room.split("_")
       if (u1 > u2) [u1, u2] = [u2, u1]
@@ -102,6 +124,7 @@ export default {
     if (url.pathname === "/delete-contact") return deleteContact(request, env)
 
     if (url.pathname === "/chats") return getChats(request, env)
+    if (url.pathname === "/pin-chat") return pinChat(request, env)
 
     return new Response("Not found", { status: 404 })
   }
@@ -146,6 +169,23 @@ async function deleteChat(request, env) {
 
   return json({ success: true })
   }
+
+async function pinChat(request, env) {
+  const { user1, user2, pinned } = await request.json()
+
+  let [u1, u2] = [user1, user2]
+  if (u1 > u2) [u1, u2] = [u2, u1]
+
+  await env.DB.prepare(`
+    UPDATE chats
+    SET pinned = ?
+    WHERE user1 = ? AND user2 = ?
+  `)
+  .bind(pinned ? 1 : 0, u1, u2)
+  .run()
+
+  return json({ success: true })
+}
 
 // ================= AUTH =================
 async function hash(password) {
