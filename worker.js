@@ -131,6 +131,22 @@ async function deleteChat(request, env) {
   return json({ success: true })
 }
 
+  // Mark Read
+  async function markRead(request, env) {
+  const { room, user } = await request.json()
+
+  await env.DB.prepare(`
+    UPDATE messages
+    SET is_read = 1
+    WHERE room = ?
+    AND sender != ?
+  `)
+  .bind(room, user)
+  .run()
+
+  return json({ success: true })
+  }
+
 // ================= AUTH =================
 async function hash(password) {
   const data = new TextEncoder().encode(password)
@@ -316,22 +332,6 @@ async function getChats(request, env) {
     `)
     .bind(email)
     .all()
-  }
-
-  // Mark Read
-  async function markRead(request, env) {
-  const { room, user } = await request.json()
-
-  await env.DB.prepare(`
-    UPDATE messages
-    SET is_read = 1
-    WHERE room = ?
-    AND sender != ?
-  `)
-  .bind(room, user)
-  .run()
-
-  return json({ success: true })
   }
 
   // 🔥 MAP KE NAMA
