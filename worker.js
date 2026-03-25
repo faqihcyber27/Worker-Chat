@@ -7,6 +7,16 @@ export class ChatRoom {
   }
 
   async fetch(request) {
+    // 🔥 HANDLE BROADCAST GLOBAL
+    if (request.method === "POST") {
+      const data = await request.json()
+
+    for (const s of this.sessions) {
+      s.send(JSON.stringify(data))
+    }
+
+    return new Response("ok")
+  }
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("Expected websocket", { status: 400 })
     }
@@ -24,20 +34,32 @@ export class ChatRoom {
   // ================= 🔥 TYPING =================
   if (data.type === "typing") {
 
-  // 🔥 ambil nama user
   const user = await this.env.DB.prepare(`
     SELECT name FROM users WHERE email = ?
   `).bind(data.sender).first()
 
+  const payload = {
+    type: "typing",
+    sender: data.sender,
+    name: user?.name || data.sender
+  }
+
+  // 🔥 kirim ke room chat
   for (const s of this.sessions) {
-    s.send(JSON.stringify({
-      type: "typing",
-      sender: data.sender,
-      name: user?.name || data.sender
-    }))
+    s.send(JSON.stringify(payload))
   }
+
+  // 🔥 kirim ke GLOBAL (INI YANG KURANG)
+  const globalId = this.env.CHAT_ROOM.idFromName("global")
+  const globalRoom = this.env.CHAT_ROOM.get(globalId)
+
+  await globalRoom.fetch(new Request("https://internal", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  }))
+
   return
-  }
+}
 
   // ================= 🔥 ONLINE =================
   if (data.type === "online") {
