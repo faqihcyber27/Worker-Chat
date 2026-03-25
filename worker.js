@@ -379,10 +379,8 @@ async function getChats(request, env) {
         AND messages.sender != ?
         AND messages.is_read = 0
       ) as unread
-
-  -- 🔥 TAMBAHAN INI
     (
-  SELECT file_type 
+  SELECT COALESCE(file_type, '') 
   FROM messages m2 
   WHERE m2.room =
     CASE 
@@ -392,7 +390,7 @@ async function getChats(request, env) {
     END
   ORDER BY m2.created_at DESC LIMIT 1
 ) as last_file_type
-  
+
     FROM chats
     WHERE user1 = ? OR user2 = ?
     ORDER BY updated_at DESC
