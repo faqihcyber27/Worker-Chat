@@ -387,35 +387,60 @@ async function getChats(request, env) {
 
   let data = await env.DB.prepare(`
     SELECT 
-      chats.*,
+  chats.*,
 
-      (
-        SELECT COUNT(*) 
-        FROM messages 
-        WHERE messages.room =
-          CASE 
-            WHEN chats.user1 < chats.user2 
-            THEN chats.user1 || '_' || chats.user2
-            ELSE chats.user2 || '_' || chats.user1
-          END
-        AND messages.sender != ?
-        AND messages.is_read = 0
-      ) as unread,
-    (
-  SELECT COALESCE(file_type, '') 
-  FROM messages m2 
-  WHERE m2.room =
-    CASE 
-      WHEN chats.user1 < chats.user2 
-      THEN chats.user1 || '_' || chats.user2
-      ELSE chats.user2 || '_' || chats.user1
-    END
-  ORDER BY m2.created_at DESC LIMIT 1
-) as last_file_type
+  (
+    SELECT COUNT(*) 
+    FROM messages 
+    WHERE messages.room =
+      CASE 
+        WHEN chats.user1 < chats.user2 
+        THEN chats.user1 || '_' || chats.user2
+        ELSE chats.user2 || '_' || chats.user1
+      END
+    AND messages.sender != ?
+    AND messages.is_read = 0
+  ) as unread,
 
-    FROM chats
-    WHERE user1 = ? OR user2 = ?
-    ORDER BY updated_at DESC
+  (
+    SELECT text 
+    FROM messages m2 
+    WHERE m2.room =
+      CASE 
+        WHEN chats.user1 < chats.user2 
+        THEN chats.user1 || '_' || chats.user2
+        ELSE chats.user2 || '_' || chats.user1
+      END
+    ORDER BY m2.created_at DESC LIMIT 1
+  ) as last_message,
+
+  (
+    SELECT file_type 
+    FROM messages m2 
+    WHERE m2.room =
+      CASE 
+        WHEN chats.user1 < chats.user2 
+        THEN chats.user1 || '_' || chats.user2
+        ELSE chats.user2 || '_' || chats.user1
+      END
+    ORDER BY m2.created_at DESC LIMIT 1
+  ) as last_file_type,
+
+  (
+    SELECT file_name 
+    FROM messages m2 
+    WHERE m2.room =
+      CASE 
+        WHEN chats.user1 < chats.user2 
+        THEN chats.user1 || '_' || chats.user2
+        ELSE chats.user2 || '_' || chats.user1
+      END
+    ORDER BY m2.created_at DESC LIMIT 1
+  ) as last_file_name
+
+FROM chats
+WHERE user1 = ? OR user2 = ?
+ORDER BY updated_at DESC
   `)
   .bind(email, email, email)
   .all()
