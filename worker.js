@@ -254,16 +254,28 @@ async function deleteContact(request, env) {
   return json({ success: true })
 }
 
-// ================= CHAT LIST =================
 async function getChats(request, env) {
   const email = new URL(request.url).searchParams.get("email")
 
   const data = await env.DB.prepare(`
-    SELECT * FROM chats
-    WHERE user1 = ? OR user2 = ?
-    ORDER BY updated_at DESC
+    SELECT 
+      chats.*,
+      users.name as friend_name,
+      (
+        SELECT COUNT(*) FROM messages 
+        WHERE room = chats.user1 || '_' || chats.user2
+        AND sender != ?
+      ) as unread
+    FROM chats
+    LEFT JOIN users 
+      ON users.email = CASE 
+        WHEN chats.user1 = ? THEN chats.user2 
+        ELSE chats.user1 
+      END
+    WHERE chats.user1 = ? OR chats.user2 = ?
+    ORDER BY chats.updated_at DESC
   `)
-  .bind(email, email)
+  .bind(email, email, email, email)
   .all()
 
   return json(data.results)
