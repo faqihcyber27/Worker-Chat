@@ -272,13 +272,39 @@ async function deleteContact(request, env) {
 async function getChats(request, env) {
   const email = new URL(request.url).searchParams.get("email")
 
-  const data = await env.DB.prepare(`
+  // ambil dari chats dulu
+  let data = await env.DB.prepare(`
     SELECT * FROM chats
     WHERE user1 = ? OR user2 = ?
     ORDER BY updated_at DESC
   `)
   .bind(email, email)
   .all()
+
+  // 🔥 kalau kosong → fallback ke messages
+  if (!data.results.length) {
+
+    const fallback = await env.DB.prepare(`
+      SELECT 
+        room,
+        MAX(created_at) as updated_at,
+        SUBSTR(room, 1, INSTR(room, '_')-1) as user1,
+        SUBSTR(room, INSTR(room, '_')+1) as user2,
+        (
+          SELECT text FROM messages m2 
+          WHERE m2.room = m1.room 
+          ORDER BY id DESC LIMIT 1
+        ) as last_message
+      FROM messages m1
+      WHERE room LIKE '%' || ? || '%'
+      GROUP BY room
+      ORDER BY updated_at DESC
+    `)
+    .bind(email)
+    .all()
+
+    return json(fallback.results)
+  }
 
   return json(data.results)
 }
