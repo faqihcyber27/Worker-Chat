@@ -1,11 +1,9 @@
-const SECRET = "supersecret123";
-
-// ===== SIMPLE JWT (base64) =====
-function generateJWT(payload){
-  return btoa(JSON.stringify(payload));
+// ===== SIMPLE TOKEN =====
+function generateToken(user){
+  return btoa(JSON.stringify(user));
 }
 
-function verifyJWT(token){
+function verifyToken(token){
   try{
     return JSON.parse(atob(token));
   }catch{
@@ -23,49 +21,63 @@ export class ChatRoom {
   async fetch(request, env){
     const url = new URL(request.url);
 
-    // ================= AUTH =================
-
-    // REGISTER
+    // ================= REGISTER =================
     if(url.pathname === "/register" && request.method === "POST"){
-      const {email,password,name} = await request.json();
-
       try{
+        const body = await request.json();
+        const {email,password,name} = body;
+
+        if(!email || !password){
+          return new Response("Missing field",{status:400});
+        }
+
         await env.DB.prepare(
           "INSERT INTO users (email,password,name) VALUES (?,?,?)"
         ).bind(email,password,name).run();
 
         return new Response("ok");
+
       }catch(e){
-        return new Response("User exists",{status:400});
+        return new Response("Error: "+e.message,{status:500});
       }
     }
 
-    // LOGIN
+    // ================= LOGIN =================
     if(url.pathname === "/login" && request.method === "POST"){
-      const {email,password} = await request.json();
+      try{
+        const body = await request.json();
+        const {email,password} = body;
 
-      const user = await env.DB.prepare(
-        "SELECT * FROM users WHERE email=? AND password=?"
-      ).bind(email,password).first();
+        const user = await env.DB.prepare(
+          "SELECT * FROM users WHERE email=?"
+        ).bind(email).first();
 
-      if(!user){
-        return new Response("Invalid",{status:401});
+        if(!user){
+          return new Response("User not found",{status:404});
+        }
+
+        if(user.password !== password){
+          return new Response("Wrong password",{status:401});
+        }
+
+        const token = generateToken({
+          id:user.id,
+          name:user.name
+        });
+
+        return new Response(JSON.stringify({token}),{
+          headers:{"Content-Type":"application/json"}
+        });
+
+      }catch(e){
+        return new Response("Error: "+e.message,{status:500});
       }
-
-      const token = generateJWT({
-        id:user.id,
-        name:user.name
-      });
-
-      return new Response(JSON.stringify({token}),{
-        headers:{"Content-Type":"application/json"}
-      });
     }
 
-    // PROFILE
+    // ================= PROFILE =================
     if(url.pathname === "/me"){
       const token = request.headers.get("Authorization");
-      const user = verifyJWT(token);
+      const user = verifyToken(token);
 
       return new Response(JSON.stringify(user),{
         headers:{"Content-Type":"application/json"}
@@ -73,11 +85,10 @@ export class ChatRoom {
     }
 
     // ================= WEBSOCKET =================
-
     if(request.headers.get("Upgrade") === "websocket"){
 
       const token = url.searchParams.get("token");
-      const user = verifyJWT(token);
+      const user = verifyToken(token);
 
       if(!user){
         return new Response("Unauthorized",{status:401});
@@ -106,7 +117,7 @@ export class ChatRoom {
         return;
       }
 
-      // TYPING
+      // typing
       if(data.type === "typing"){
         this.broadcast({
           type:"typing",
@@ -115,11 +126,11 @@ export class ChatRoom {
         return;
       }
 
-      // MESSAGE / AUDIO
-      if(data.type === "message" || data.type === "audio"){
-
+      // message
+      if(data.type === "message"){
         const msg = {
-          ...data,
+          type:"message",
+          msg:data.msg,
           user:user.name,
           time:new Date().toLocaleTimeString().slice(0,5)
         };
