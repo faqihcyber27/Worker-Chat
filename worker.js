@@ -1,9 +1,82 @@
+// ================= DO CLASS =================
+export class ChatRoom {
+  constructor(state, env) {
+    this.state = state
+    this.env = env
+    this.sessions = new Set()
+  }
+
+  async fetch(request) {
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return new Response("Expected websocket", { status: 400 })
+    }
+
+    const pair = new WebSocketPair()
+    const [client, server] = Object.values(pair)
+
+    server.accept()
+    this.sessions.add(server)
+
+    server.addEventListener("message", async (event) => {
+      const data = JSON.parse(event.data)
+
+      // simpan ke DB
+      await this.env.DB.prepare(`
+        INSERT INTO messages (room, sender, text, created_at)
+        VALUES (?, ?, ?, ?)
+      `)
+      .bind(data.room, data.sender, data.text, new Date().toISOString())
+      .run()
+
+      // broadcast ke semua user di room
+      for (const s of this.sessions) {
+        s.send(JSON.stringify(data))
+      }
+    })
+
+    server.addEventListener("close", () => {
+      this.sessions.delete(server)
+    })
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client
+    })
+  }
+}
+
+// ================= MAIN =================
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
 
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: cors() })
+    }
+
+    // ===== WEBSOCKET (NEW) =====
+    if (url.pathname === "/ws") {
+      const room = url.searchParams.get("room")
+
+      const id = env.CHAT_ROOM.idFromName(room)
+      const obj = env.CHAT_ROOM.get(id)
+
+      return obj.fetch(request)
+    }
+
+    // ===== GET CHAT HISTORY =====
+    if (url.pathname === "/messages") {
+      const room = url.searchParams.get("room")
+
+      const data = await env.DB.prepare(`
+        SELECT * FROM messages
+        WHERE room = ?
+        ORDER BY id ASC
+      `)
+      .bind(room)
+      .all()
+
+      return json(data.results)
     }
 
     // ===== AUTH =====
@@ -26,9 +99,7 @@ export default {
   }
 }
 
-//
-// ===== AUTH =====
-//
+// ================= AUTH =================
 async function hash(password) {
   const data = new TextEncoder().encode(password)
   const hashBuffer = await crypto.subtle.digest("SHA-256", data)
@@ -69,22 +140,13 @@ async function login(request, env) {
 
   return json({
     token: btoa(email),
-    user: {
-      name: user.name,
-      email: user.email
-    }
+    user: { name: user.name, email: user.email }
   })
 }
 
-//
-// ===== FRIEND REQUEST =====
-//
+// ================= FRIEND REQUEST =================
 async function sendRequest(request, env) {
   const { from_email, to_email } = await request.json()
-
-  if (!from_email || !to_email) {
-    return json({ error: "Data tidak lengkap" }, 400)
-  }
 
   if (from_email === to_email) {
     return json({ error: "Tidak bisa add diri sendiri" }, 400)
@@ -118,14 +180,13 @@ async function respondRequest(request, env) {
     SELECT * FROM contact_requests WHERE id=?
   `).bind(id).first()
 
-  if (!req) return json({ error: "Request tidak ditemukan" }, 404)
+  if (!req) return json({ error: "Not found" }, 404)
 
   if (action === "accept") {
     await env.DB.prepare(`
       UPDATE contact_requests SET status='accepted' WHERE id=?
     `).bind(id).run()
 
-    // insert dua arah
     await env.DB.prepare(`
       INSERT INTO contacts (user_email, friend_email, created_at)
       VALUES (?, ?, ?)
@@ -146,9 +207,7 @@ async function respondRequest(request, env) {
   return json({ success: true })
 }
 
-//
-// ===== CONTACT =====
-//
+// ================= CONTACT =================
 async function getContacts(request, env) {
   const email = new URL(request.url).searchParams.get("email")
 
@@ -164,17 +223,9 @@ async function getContacts(request, env) {
   return json(data.results)
 }
 
-//
-// 🔥 DELETE CONTACT (FIXED VERSION)
-//
 async function deleteContact(request, env) {
   const { user_email, friend_email } = await request.json()
 
-  if (!user_email || !friend_email) {
-    return json({ error: "Data tidak lengkap" }, 400)
-  }
-
-  // DELETE dua arah + ignore case
   await env.DB.prepare(`
     DELETE FROM contacts 
     WHERE (LOWER(user_email)=LOWER(?) AND LOWER(friend_email)=LOWER(?))
@@ -186,9 +237,7 @@ async function deleteContact(request, env) {
   return json({ success: true })
 }
 
-//
-// ===== CHAT LIST =====
-//
+// ================= CHAT LIST =================
 async function getChats(request, env) {
   const email = new URL(request.url).searchParams.get("email")
 
@@ -201,9 +250,7 @@ async function getChats(request, env) {
   return json(data.results)
 }
 
-//
-// ===== HELPERS =====
-//
+// ================= HELPERS =================
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
