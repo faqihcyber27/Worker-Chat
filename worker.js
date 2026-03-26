@@ -31,6 +31,7 @@ export class ChatRoom {
 
     server.accept()
     this.sessions.add(server)
+    server.room = roomName
     
 const url = new URL(request.url)
 const roomName = url.searchParams.get("room")
@@ -57,7 +58,7 @@ const roomName = url.searchParams.get("room")
   if (data.type === "typing") {
     let [u1, u2] = data.room.split("_")
     if (u1 > u2) [u1, u2] = [u2, u1]
-    const fixedRoom = `${u1}_${u2}`
+    if (s.room === roomName)
 
   const user = await this.env.DB.prepare(`
     SELECT name, avatar FROM users WHERE email = ?
@@ -67,13 +68,15 @@ const roomName = url.searchParams.get("room")
     type: "typing",
     sender: data.sender,
     name: user?.name || data.sender,
-    room: fixedRoom
+    room: roomName
   }
 
   // 🔥 kirim ke room chat
   for (const s of this.sessions) {
-    s.send(JSON.stringify(payload))
-  }
+    if (s.room === roomName) {
+      s.send(JSON.stringify(payload))
+    }
+}
   return
 }
 
@@ -191,9 +194,9 @@ for (const s of this.sessions) {
     server.addEventListener("close", () => {
     this.sessions.delete(server)
   // 🔥 hapus dari onlineUsers
-    for (const [email, ws] of this.onlineUsers.entries()) {
-      if (ws === server) {
-        this.onlineUsers.delete(email)
+    for (const s of this.sessions) {
+      if (s.room === roomName) {
+        s.send(JSON.stringify(deliveredPayload))
       }
     }
 
