@@ -27,6 +27,9 @@ export class ChatRoom {
 
     server.accept()
     this.sessions.add(server)
+    
+const url = new URL(request.url)
+const roomName = url.searchParams.get("room")
 
     server.addEventListener("message", async (event) => {
   const data = JSON.parse(event.data)
@@ -77,7 +80,7 @@ export class ChatRoom {
 }
 
   // ================= 🔥 ONLINE =================
-  if (data.type === "online") {
+  if (data.type === "online" && roomName === "global") {
 
   // replace old connection
   if (this.onlineUsers.has(data.user)) {
@@ -85,11 +88,8 @@ export class ChatRoom {
       this.onlineUsers.get(data.user).close()
     } catch(e){}
   }
-
   this.onlineUsers.set(data.user, server)
-
   const now = new Date().toISOString()
-
   await this.env.DB.prepare(`
     UPDATE users SET last_seen = ? WHERE email = ?
   `).bind(now, data.user).run()
@@ -103,32 +103,6 @@ export class ChatRoom {
   for (const s of this.sessions) {
     s.send(JSON.stringify(payload))
   }
-
-  // 🔥 GLOBAL BROADCAST
-  const globalId = this.env.CHAT_ROOM.idFromName("global")
-  const globalRoom = this.env.CHAT_ROOM.get(globalId)
-
-  await globalRoom.fetch(new Request("https://internal", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  }))
-
-  return
-}
-  
-  for (const s of this.sessions) {
-    s.send(JSON.stringify(payload))
-  }
-  // kirim ke GLOBAL
-  const globalId = this.env.CHAT_ROOM.idFromName("global")
-  const globalRoom = this.env.CHAT_ROOM.get(globalId)
-
-  await globalRoom.fetch(new Request("https://internal", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  }))
-
-  return
 }
 
       let [u1, u2] = data.room.split("_")
@@ -198,18 +172,19 @@ const deliveredPayload = {
   room: data.room,
   sender: data.sender
 }
+for (const s of this.sessions) {
+  s.send(JSON.stringify(deliveredPayload))
+}
     })
 
     server.addEventListener("close", () => {
-
-  this.sessions.delete(server)
-
+    this.sessions.delete(server)
   // 🔥 hapus dari onlineUsers
-  for (const [email, ws] of this.onlineUsers.entries()) {
-    if (ws === server) {
-      this.onlineUsers.delete(email)
+    for (const [email, ws] of this.onlineUsers.entries()) {
+      if (ws === server) {
+        this.onlineUsers.delete(email)
+      }
     }
-  }
 
   // 🔥 broadcast ulang
   const payload = {
@@ -220,13 +195,6 @@ const deliveredPayload = {
   for (const s of this.sessions) {
     s.send(JSON.stringify(payload))
   }
-  const globalId = this.env.CHAT_ROOM.idFromName("global")
-  const globalRoom = this.env.CHAT_ROOM.get(globalId)
-
-  await globalRoom.fetch(new Request("https://internal", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  }))
 })
 
     return new Response(null, {
