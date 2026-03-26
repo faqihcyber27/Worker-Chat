@@ -11,7 +11,11 @@ export class ChatRoom {
     // 🔥 HANDLE BROADCAST GLOBAL
     if (request.method === "POST") {
       const data = await request.json()
-
+    if (data.type === "online_list") {
+      this.onlineUsers = new Map(
+      data.users.map(u => [u, true])
+      )
+    }
     for (const s of this.sessions) {
       s.send(JSON.stringify(data))
     }
@@ -82,14 +86,16 @@ const roomName = url.searchParams.get("room")
   // ================= 🔥 ONLINE =================
   if (data.type === "online" && roomName === "global") {
 
-  // replace old connection
   if (this.onlineUsers.has(data.user)) {
     try {
       this.onlineUsers.get(data.user).close()
     } catch(e){}
   }
+
   this.onlineUsers.set(data.user, server)
+
   const now = new Date().toISOString()
+
   await this.env.DB.prepare(`
     UPDATE users SET last_seen = ? WHERE email = ?
   `).bind(now, data.user).run()
@@ -99,10 +105,21 @@ const roomName = url.searchParams.get("room")
     users: Array.from(this.onlineUsers.keys())
   }
 
-  // 🔥 LOCAL BROADCAST
+  // ✅ LOCAL
   for (const s of this.sessions) {
     s.send(JSON.stringify(payload))
   }
+
+  // ✅ GLOBAL (WAJIB ADA)
+  const globalId = this.env.CHAT_ROOM.idFromName("global")
+  const globalRoom = this.env.CHAT_ROOM.get(globalId)
+
+  await globalRoom.fetch(new Request("https://internal", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  }))
+
+  return
 }
 
       let [u1, u2] = data.room.split("_")
