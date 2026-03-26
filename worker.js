@@ -4,6 +4,7 @@ export class ChatRoom {
     this.state = state
     this.env = env
     this.sessions = new Set()
+    this.onlineUsers = new Map()
   }
 
   async fetch(request) {
@@ -77,18 +78,44 @@ export class ChatRoom {
 
   // ================= 🔥 ONLINE =================
   if (data.type === "online") {
-    const now = new Date().toISOString()
 
-  // 🔥 update last seen tiap ping
+  // replace old connection
+  if (this.onlineUsers.has(data.user)) {
+    try {
+      this.onlineUsers.get(data.user).close()
+    } catch(e){}
+  }
+
+  this.onlineUsers.set(data.user, server)
+
+  const now = new Date().toISOString()
+
   await this.env.DB.prepare(`
     UPDATE users SET last_seen = ? WHERE email = ?
   `).bind(now, data.user).run()
-  
+
   const payload = {
-    type: "online",
-    user: data.user,
-    last_seen: now
+    type: "online_list",
+    users: Array.from(this.onlineUsers.keys())
   }
+
+  // 🔥 LOCAL BROADCAST
+  for (const s of this.sessions) {
+    s.send(JSON.stringify(payload))
+  }
+
+  // 🔥 GLOBAL BROADCAST
+  const globalId = this.env.CHAT_ROOM.idFromName("global")
+  const globalRoom = this.env.CHAT_ROOM.get(globalId)
+
+  await globalRoom.fetch(new Request("https://internal", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  }))
+
+  return
+}
+  
   for (const s of this.sessions) {
     s.send(JSON.stringify(payload))
   }
@@ -171,15 +198,36 @@ const deliveredPayload = {
   room: data.room,
   sender: data.sender
 }
-
-for (const s of this.sessions) {
-  s.send(JSON.stringify(deliveredPayload))
-}
     })
 
     server.addEventListener("close", () => {
-      this.sessions.delete(server)
-    })
+
+  this.sessions.delete(server)
+
+  // 🔥 hapus dari onlineUsers
+  for (const [email, ws] of this.onlineUsers.entries()) {
+    if (ws === server) {
+      this.onlineUsers.delete(email)
+    }
+  }
+
+  // 🔥 broadcast ulang
+  const payload = {
+    type: "online_list",
+    users: Array.from(this.onlineUsers.keys())
+  }
+
+  for (const s of this.sessions) {
+    s.send(JSON.stringify(payload))
+  }
+  const globalId = this.env.CHAT_ROOM.idFromName("global")
+  const globalRoom = this.env.CHAT_ROOM.get(globalId)
+
+  await globalRoom.fetch(new Request("https://internal", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  }))
+})
 
     return new Response(null, {
       status: 101,
