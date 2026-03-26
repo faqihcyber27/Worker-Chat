@@ -62,17 +62,6 @@ export class ChatRoom {
   for (const s of this.sessions) {
     s.send(JSON.stringify(payload))
   }
-  
-  // 🔥 KIRIM STATUS DELIVERED
-const deliveredPayload = {
-  type: "delivered",
-  room: data.room,
-  sender: data.sender
-}
-
-for (const s of this.sessions) {
-  s.send(JSON.stringify(deliveredPayload))
-}
 
   // 🔥 kirim ke GLOBAL (INI YANG KURANG)
   const globalId = this.env.CHAT_ROOM.idFromName("global")
@@ -175,6 +164,16 @@ await this.env.DB.prepare(`
 
 for (const s of this.sessions) {
   s.send(JSON.stringify(payload))
+}
+  // 🔥 KIRIM STATUS DELIVERED
+const deliveredPayload = {
+  type: "delivered",
+  room: data.room,
+  sender: data.sender
+}
+
+for (const s of this.sessions) {
+  s.send(JSON.stringify(deliveredPayload))
 }
     })
 
