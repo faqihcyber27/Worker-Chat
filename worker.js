@@ -63,7 +63,8 @@ const roomName = url.searchParams.get("room")
   const payload = {
     type: "typing",
     sender: data.sender,
-    name: user?.name || data.sender
+    name: user?.name || data.sender,
+    room: data.room
   }
 
   // 🔥 kirim ke room chat
