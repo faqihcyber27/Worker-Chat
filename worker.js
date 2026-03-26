@@ -35,6 +35,8 @@ export class ChatRoom {
     
 const url = new URL(request.url)
 const roomName = url.searchParams.get("room")
+server.room = roomName
+this.sessions.add(server)
 
     server.addEventListener("message", async (event) => {
   const data = JSON.parse(event.data)
@@ -56,9 +58,6 @@ const roomName = url.searchParams.get("room")
 }
   // ================= 🔥 TYPING =================
   if (data.type === "typing") {
-    let [u1, u2] = data.room.split("_")
-    if (u1 > u2) [u1, u2] = [u2, u1]
-    if (s.room === roomName)
 
   const user = await this.env.DB.prepare(`
     SELECT name, avatar FROM users WHERE email = ?
