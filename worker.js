@@ -106,7 +106,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 0)
   data.text || null,
   data.file || null,
   data.file_name || null,
-  data.file_type || (data.file ? "file" : null),
+  data.file_type || (data.file ? "image" : null),
   now
 )
       .run()
