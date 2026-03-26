@@ -31,6 +31,20 @@ export class ChatRoom {
   const data = JSON.parse(event.data)
   const now = new Date().toISOString()
 
+  if (data.type === "read") {
+
+  const payload = {
+    type: "read",
+    user: data.user,
+    room: data.room
+  }
+
+  for (const s of this.sessions) {
+    s.send(JSON.stringify(payload))
+  }
+
+  return
+}
   // ================= 🔥 TYPING =================
   if (data.type === "typing") {
 
@@ -48,6 +62,17 @@ export class ChatRoom {
   for (const s of this.sessions) {
     s.send(JSON.stringify(payload))
   }
+  
+  // 🔥 KIRIM STATUS DELIVERED
+const deliveredPayload = {
+  type: "delivered",
+  room: data.room,
+  sender: data.sender
+}
+
+for (const s of this.sessions) {
+  s.send(JSON.stringify(deliveredPayload))
+}
 
   // 🔥 kirim ke GLOBAL (INI YANG KURANG)
   const globalId = this.env.CHAT_ROOM.idFromName("global")
