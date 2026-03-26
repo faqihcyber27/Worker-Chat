@@ -517,7 +517,7 @@ ORDER BY updated_at DESC
       c.user1 === email ? c.user2 : c.user1
 
     const user = await env.DB.prepare(`
-      SELECT name FROM users WHERE email = ?
+      SELECT name, avatar, bio FROM users WHERE email = ?
     `)
     .bind(friendEmail)
     .first()
