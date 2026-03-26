@@ -106,7 +106,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 0)
   data.text || null,
   data.file || null,
   data.file_name || null,
-  data.file_type || (data.file ? "image/jpeg" : null),
+  data.file_type || (data.file ? "image" : null),
   now
 )
       .run()
@@ -203,6 +203,7 @@ export default {
 
     if (url.pathname === "/chats") return getChats(request, env)
     if (url.pathname === "/pin-chat") return pinChat(request, env)
+    if (url.pathname === "/update-profile") return updateProfile(request, env)
 
     return new Response("Not found", { status: 404 })
   }
@@ -260,6 +261,20 @@ async function pinChat(request, env) {
     WHERE user1 = ? AND user2 = ?
   `)
   .bind(pinned ? 1 : 0, u1, u2)
+  .run()
+
+  return json({ success: true })
+}
+
+async function updateProfile(request, env) {
+  const { email, name, avatar, bio } = await request.json()
+
+  await env.DB.prepare(`
+    UPDATE users
+    SET name = ?, avatar = ?, bio = ?
+    WHERE email = ?
+  `)
+  .bind(name, avatar, bio, email)
   .run()
 
   return json({ success: true })
@@ -378,7 +393,7 @@ async function getContacts(request, env) {
   const email = new URL(request.url).searchParams.get("email")
 
   const data = await env.DB.prepare(`
-    SELECT users.name, users.email
+    SELECT users.name, users.email, users.avatar, users.bio
     FROM contacts
     JOIN users ON users.email = contacts.friend_email
     WHERE contacts.user_email = ?
@@ -510,7 +525,9 @@ ORDER BY updated_at DESC
     return {
       ...c,
       friend_email: friendEmail,
-      friend_name: user?.name || friendEmail
+      friend_name: user?.name || friendEmail,
+      friend_avatar: user?.avatar || null,
+      friend_bio: user?.bio || ""
     }
   }))
 
