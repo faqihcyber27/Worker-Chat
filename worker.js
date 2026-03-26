@@ -55,6 +55,9 @@ const roomName = url.searchParams.get("room")
 }
   // ================= 🔥 TYPING =================
   if (data.type === "typing") {
+    let [u1, u2] = data.room.split("_")
+    if (u1 > u2) [u1, u2] = [u2, u1]
+    const fixedRoom = `${u1}_${u2}`
 
   const user = await this.env.DB.prepare(`
     SELECT name, avatar FROM users WHERE email = ?
@@ -64,23 +67,13 @@ const roomName = url.searchParams.get("room")
     type: "typing",
     sender: data.sender,
     name: user?.name || data.sender,
-    room: data.room
+    room: fixedRoom
   }
 
   // 🔥 kirim ke room chat
   for (const s of this.sessions) {
     s.send(JSON.stringify(payload))
   }
-
-  // 🔥 kirim ke GLOBAL (INI YANG KURANG)
-  const globalId = this.env.CHAT_ROOM.idFromName("global")
-  const globalRoom = this.env.CHAT_ROOM.get(globalId)
-
-  await globalRoom.fetch(new Request("https://internal", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  }))
-
   return
 }
 
