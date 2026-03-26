@@ -409,7 +409,9 @@ async function getChats(request, env) {
 
   let data = await env.DB.prepare(`
     SELECT 
-  chats.*,
+      chats.*,
+
+    -- 🔥 UNREAD
   (
     SELECT COUNT(*) 
     FROM messages 
@@ -422,8 +424,10 @@ async function getChats(request, env) {
     AND messages.sender != ?
     AND messages.is_read = 0
   ) as unread,
+
+  -- 🔥 LAST MESSAGE (WAJIB ADA)
   (
-    SELECT file_type 
+    SELECT m2.text 
     FROM messages m2 
     WHERE m2.room =
       CASE 
@@ -431,10 +435,27 @@ async function getChats(request, env) {
         THEN chats.user1 || '_' || chats.user2
         ELSE chats.user2 || '_' || chats.user1
       END
-    ORDER BY m2.id DESC LIMIT 1
+    ORDER BY m2.created_at DESC
+    LIMIT 1
+  ) as last_message,
+
+  -- 🔥 LAST FILE TYPE (FIXED)
+  (
+    SELECT m2.file_type
+    FROM messages m2
+    WHERE m2.room =
+      CASE 
+        WHEN chats.user1 < chats.user2 
+        THEN chats.user1 || '_' || chats.user2
+        ELSE chats.user2 || '_' || chats.user1
+      END
+    ORDER BY m2.created_at DESC
+    LIMIT 1
   ) as last_file_type,
+
+  -- 🔥 LAST FILE NAME
   (
-    SELECT file_name 
+    SELECT m2.file_name 
     FROM messages m2 
     WHERE m2.room =
       CASE 
@@ -442,7 +463,8 @@ async function getChats(request, env) {
         THEN chats.user1 || '_' || chats.user2
         ELSE chats.user2 || '_' || chats.user1
       END
-    ORDER BY m2.id DESC LIMIT 1
+    ORDER BY m2.created_at DESC
+    LIMIT 1
   ) as last_file_name
 
 FROM chats
