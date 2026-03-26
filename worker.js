@@ -63,15 +63,21 @@ export class ChatRoom {
 
   // ================= 🔥 ONLINE =================
   if (data.type === "online") {
+    const now = new Date().toISOString()
+
+  // 🔥 update last seen tiap ping
+  await this.env.DB.prepare(`
+    UPDATE users SET last_seen = ? WHERE email = ?
+  `).bind(now, data.user).run()
+  
   const payload = {
     type: "online",
-    user: data.user
+    user: data.user,
+    last_seen: now
   }
-
   for (const s of this.sessions) {
     s.send(JSON.stringify(payload))
   }
-
   // kirim ke GLOBAL
   const globalId = this.env.CHAT_ROOM.idFromName("global")
   const globalRoom = this.env.CHAT_ROOM.get(globalId)
@@ -517,7 +523,7 @@ ORDER BY updated_at DESC
       c.user1 === email ? c.user2 : c.user1
 
     const user = await env.DB.prepare(`
-      SELECT name, avatar, bio FROM users WHERE email = ?
+      SELECT name, avatar, bio, last_seen FROM users WHERE email = ?
     `)
     .bind(friendEmail)
     .first()
@@ -527,7 +533,8 @@ ORDER BY updated_at DESC
       friend_email: friendEmail,
       friend_name: user?.name || friendEmail,
       friend_avatar: user?.avatar || null,
-      friend_bio: user?.bio || ""
+      friend_bio: user?.bio || "",
+      friend_last_seen: user?.last_seen || null
     }
   }))
 
