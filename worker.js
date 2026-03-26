@@ -35,7 +35,7 @@ export class ChatRoom {
   if (data.type === "typing") {
 
   const user = await this.env.DB.prepare(`
-    SELECT name FROM users WHERE email = ?
+    SELECT name, avatar FROM users WHERE email = ?
   `).bind(data.sender).first()
 
   const payload = {
