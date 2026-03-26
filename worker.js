@@ -64,6 +64,11 @@ export class ChatRoom {
   // ================= 🔥 ONLINE =================
   if (data.type === "online") {
     const now = new Date().toISOString()
+
+  // 🔥 update last seen tiap ping
+  await this.env.DB.prepare(`
+    UPDATE users SET last_seen = ? WHERE email = ?
+  `).bind(now, data.user).run()
   
   const payload = {
     type: "online",
