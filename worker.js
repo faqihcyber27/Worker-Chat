@@ -13,7 +13,7 @@ export class ChatRoom {
       const data = await request.json()
     if (data.type === "online_list") {
       this.onlineUsers = new Map(
-      data.users.map(u => [u, true])
+      data.users.map(u => [u, null])
       )
     }
     for (const s of this.sessions) {
@@ -212,6 +212,14 @@ for (const s of this.sessions) {
   for (const s of this.sessions) {
     s.send(JSON.stringify(payload))
   }
+  // 🔥 GLOBAL SYNC (WAJIB)
+const globalId = this.env.CHAT_ROOM.idFromName("global")
+const globalRoom = this.env.CHAT_ROOM.get(globalId)
+
+await globalRoom.fetch(new Request("https://internal", {
+  method: "POST",
+  body: JSON.stringify(payload)
+}))
 })
 
     return new Response(null, {
