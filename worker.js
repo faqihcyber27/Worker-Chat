@@ -304,6 +304,70 @@ export default {
     }
 
     const url = new URL(request.url)
+    
+    // ================= SEND FRIEND REQUEST =================
+if (url.pathname === "/send-request" && request.method === "POST") {
+
+  const body = await request.json()
+  const { from_email, to_email } = body
+
+  // ❌ VALIDASI
+  if (!from_email || !to_email || from_email === to_email) {
+    return new Response(JSON.stringify({ error: "invalid request" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json", ...cors() }
+    })
+  }
+
+  // 🔍 CEK USER ADA
+  const user = await env.DB.prepare(`
+    SELECT email FROM users WHERE email = ?
+  `).bind(to_email).first()
+
+  if (!user) {
+    return new Response(JSON.stringify({ error: "user not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json", ...cors() }
+    })
+  }
+
+  // 🔍 CEK SUDAH BERTEMAN
+  const exists = await env.DB.prepare(`
+    SELECT * FROM contacts
+    WHERE (user_email = ? AND friend_email = ?)
+       OR (user_email = ? AND friend_email = ?)
+  `)
+  .bind(from_email, to_email, to_email, from_email)
+  .first()
+
+  if (exists) {
+    return new Response(JSON.stringify({ error: "already friends" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json", ...cors() }
+    })
+  }
+
+  // ✅ INSERT LANGSUNG (AUTO ACCEPT)
+  await env.DB.prepare(`
+    INSERT INTO contacts (user_email, friend_email)
+    VALUES (?, ?)
+  `).bind(from_email, to_email).run()
+
+  // 🔥 REALTIME UPDATE CONTACTS
+  const globalId = env.CHAT_ROOM.idFromName("global")
+  const globalRoom = env.CHAT_ROOM.get(globalId)
+
+  await globalRoom.fetch(new Request("https://internal", {
+    method: "POST",
+    body: JSON.stringify({
+      type: "contact_update"
+    })
+  }))
+
+  return new Response(JSON.stringify({ success: true }), {
+    headers: { "Content-Type": "application/json", ...cors() }
+  })
+}
 
     // ================= DELETE CONTACT =================
 if (url.pathname === "/delete-contact" && request.method === "POST") {
