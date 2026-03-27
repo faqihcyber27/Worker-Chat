@@ -305,6 +305,40 @@ export default {
 
     const url = new URL(request.url)
 
+    // ================= DELETE CONTACT =================
+if (url.pathname === "/delete-contact" && request.method === "POST") {
+
+  const body = await request.json()
+  const { user_email, friend_email } = body
+
+  // 🔥 DELETE DUA ARAH (INI YANG PENTING)
+  await env.DB.prepare(`
+    DELETE FROM contacts
+    WHERE (user_email = ? AND friend_email = ?)
+       OR (user_email = ? AND friend_email = ?)
+  `)
+  .bind(user_email, friend_email, friend_email, user_email)
+  .run()
+
+  // 🔥 BROADCAST REALTIME (TIDAK PERLU FRONTEND TRIGGER LAGI)
+  const globalId = env.CHAT_ROOM.idFromName("global")
+  const globalRoom = env.CHAT_ROOM.get(globalId)
+
+  await globalRoom.fetch(new Request("https://internal", {
+    method: "POST",
+    body: JSON.stringify({
+      type: "contact_update"
+    })
+  }))
+
+  return new Response(JSON.stringify({ success: true }), {
+    headers: { 
+      "Content-Type": "application/json",
+      ...cors()
+    }
+  })
+}
+
     if (url.pathname === "/ws") {
       const room = url.searchParams.get("room")
       const id = env.CHAT_ROOM.idFromName(room)
