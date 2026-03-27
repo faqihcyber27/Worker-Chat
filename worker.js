@@ -28,13 +28,10 @@ export class ChatRoom {
 
     const pair = new WebSocketPair()
     const [client, server] = Object.values(pair)
-
-    server.accept()
-    this.sessions.add(server)
-    server.room = roomName
     
 const url = new URL(request.url)
 const roomName = url.searchParams.get("room")
+server.accept()
 server.room = roomName
 this.sessions.add(server)
 
@@ -51,8 +48,10 @@ this.sessions.add(server)
   }
 
   for (const s of this.sessions) {
+  if (s.room === roomName) {
     s.send(JSON.stringify(payload))
   }
+}
 
   return
 }
@@ -103,8 +102,10 @@ this.sessions.add(server)
 
   // ✅ LOCAL
   for (const s of this.sessions) {
+  if (s.room === roomName) {
     s.send(JSON.stringify(payload))
   }
+}
 
   // ✅ GLOBAL (WAJIB ADA)
   const globalId = this.env.CHAT_ROOM.idFromName("global")
@@ -177,7 +178,9 @@ await this.env.DB.prepare(`
 }
 
 for (const s of this.sessions) {
-  s.send(JSON.stringify(payload))
+  if (s.room === roomName) {
+    s.send(JSON.stringify(payload))
+  }
 }
   // 🔥 KIRIM STATUS DELIVERED
 const deliveredPayload = {
@@ -206,8 +209,10 @@ for (const s of this.sessions) {
   }
 
   for (const s of this.sessions) {
+  if (s.room === roomName) {
     s.send(JSON.stringify(payload))
   }
+}
   // 🔥 GLOBAL SYNC (WAJIB)
 const globalId = this.env.CHAT_ROOM.idFromName("global")
 const globalRoom = this.env.CHAT_ROOM.get(globalId)
