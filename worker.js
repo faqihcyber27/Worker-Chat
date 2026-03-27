@@ -7,14 +7,11 @@ export class ChatRoom {
     this.onlineUsers = new Map()
   }
 
-  // 🔥 SAFE BROADCAST
   broadcast(payload, roomName = null) {
     for (const s of this.sessions) {
       if (!roomName || s.room === roomName) {
         if (s.readyState === 1) {
-          try {
-            s.send(JSON.stringify(payload))
-          } catch (e) {}
+          try { s.send(JSON.stringify(payload)) } catch {}
         }
       }
     }
@@ -22,7 +19,7 @@ export class ChatRoom {
 
   async fetch(request) {
 
-    // 🔥 INTERNAL GLOBAL BROADCAST
+    // 🔥 INTERNAL BROADCAST
     if (request.method === "POST") {
       const data = await request.json()
       this.broadcast(data)
@@ -59,34 +56,25 @@ export class ChatRoom {
 
       // ================= TYPING =================
       if (data.type === "typing") {
-        const user = await this.env.DB.prepare(`
-          SELECT name FROM users WHERE email = ?
-        `).bind(data.sender).first()
-
         this.broadcast({
           type: "typing",
           sender: data.sender,
-          name: user?.name || data.sender,
           room: roomName
         }, roomName)
-
         return
       }
 
       // ================= ONLINE =================
       if (data.type === "online" && roomName === "global") {
 
-        // 🔥 prevent duplicate
         if (this.onlineUsers.has(data.user)) {
-          try {
-            this.onlineUsers.get(data.user).close()
-          } catch(e){}
+          try { this.onlineUsers.get(data.user).close() } catch {}
         }
 
         this.onlineUsers.set(data.user, server)
 
         await this.env.DB.prepare(`
-          UPDATE users SET last_seen = ? WHERE email = ?
+          UPDATE users SET last_seen=? WHERE email=?
         `).bind(now, data.user).run()
 
         const payload = {
@@ -94,17 +82,7 @@ export class ChatRoom {
           users: Array.from(this.onlineUsers.keys())
         }
 
-        // local
         this.broadcast(payload)
-
-        // global sync
-        const globalId = this.env.CHAT_ROOM.idFromName("global")
-        const globalRoom = this.env.CHAT_ROOM.get(globalId)
-
-        await globalRoom.fetch(new Request("https://internal", {
-          method: "POST",
-          body: JSON.stringify(payload)
-        }))
 
         return
       }
@@ -114,10 +92,9 @@ export class ChatRoom {
       if (u1 > u2) [u1, u2] = [u2, u1]
 
       await this.env.DB.prepare(`
-        INSERT INTO messages (
-          room, sender, text, file, file_name, file_type, created_at, is_read
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+        INSERT INTO messages
+        (room,sender,text,file,file_name,file_type,created_at,is_read)
+        VALUES(?,?,?,?,?,?,?,0)
       `)
       .bind(
         data.room,
@@ -125,22 +102,17 @@ export class ChatRoom {
         data.text || null,
         data.file || null,
         data.file_name || null,
-        data.file_type || (data.file ? "image" : null),
+        data.file_type || null,
         now
-      )
-      .run()
+      ).run()
 
-      const lastMsg =
-        data.text ||
-        (data.file_type?.includes("image") ? "📷 Foto" : "📎 File")
+      const lastMsg = data.text || "📎 File"
 
       await this.env.DB.prepare(`
-        INSERT INTO chats (user1, user2, last_message, updated_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(user1, user2)
-        DO UPDATE SET
-          last_message = excluded.last_message,
-          updated_at = excluded.updated_at
+        INSERT INTO chats (user1,user2,last_message,updated_at)
+        VALUES(?,?,?,?)
+        ON CONFLICT(user1,user2)
+        DO UPDATE SET last_message=excluded.last_message,updated_at=excluded.updated_at
       `)
       .bind(u1, u2, lastMsg, now)
       .run()
@@ -151,15 +123,14 @@ export class ChatRoom {
         sender: data.sender,
         text: data.text || null,
         file: data.file || null,
-        file_name: data.file_name || null,
         file_type: data.file_type || null,
         created_at: now
       }
 
-      // 🔥 ROOM (chat.html)
+      // 🔥 ROOM
       this.broadcast(payload, roomName)
 
-      // 🔥 GLOBAL (chats.html)
+      // 🔥 GLOBAL (PENTING)
       const globalId = this.env.CHAT_ROOM.idFromName("global")
       const globalRoom = this.env.CHAT_ROOM.get(globalId)
 
@@ -167,47 +138,22 @@ export class ChatRoom {
         method: "POST",
         body: JSON.stringify(payload)
       }))
-
-      // delivered
-      this.broadcast({
-        type: "delivered",
-        room: data.room,
-        sender: data.sender
-      }, roomName)
     })
 
-    // ================= CLOSE =================
-    server.addEventListener("close", async () => {
+    server.addEventListener("close", () => {
       this.sessions.delete(server)
 
-      // remove online
       for (const [email, ws] of this.onlineUsers) {
-        if (ws === server) {
-          this.onlineUsers.delete(email)
-        }
+        if (ws === server) this.onlineUsers.delete(email)
       }
 
-      const payload = {
+      this.broadcast({
         type: "online_list",
         users: Array.from(this.onlineUsers.keys())
-      }
-
-      // 🔥 broadcast global
-      this.broadcast(payload)
-
-      const globalId = this.env.CHAT_ROOM.idFromName("global")
-      const globalRoom = this.env.CHAT_ROOM.get(globalId)
-
-      await globalRoom.fetch(new Request("https://internal", {
-        method: "POST",
-        body: JSON.stringify(payload)
-      }))
+      })
     })
 
-    return new Response(null, {
-      status: 101,
-      webSocket: client
-    })
+    return new Response(null, { status: 101, webSocket: client })
   }
 }
 
@@ -226,17 +172,74 @@ export default {
       return env.CHAT_ROOM.get(id).fetch(request)
     }
 
-    if (url.pathname === "/respond-request")
-      return respondRequest(request, env)
+    if (url.pathname === "/messages") return getMessages(request, env)
+    if (url.pathname === "/chats") return getChats(request, env)
+    if (url.pathname === "/contacts") return getContacts(request, env)
+    if (url.pathname === "/update-profile") return updateProfile(request, env)
 
-    if (url.pathname === "/delete-contact")
-      return deleteContact(request, env)
+    if (url.pathname === "/respond-request") return respondRequest(request, env)
+    if (url.pathname === "/delete-contact") return deleteContact(request, env)
 
     return new Response("Not found", { status: 404 })
   }
 }
 
-// ================= FRIEND ACCEPT =================
+// ================= API =================
+
+async function getMessages(request, env) {
+  const room = new URL(request.url).searchParams.get("room")
+
+  const data = await env.DB.prepare(`
+    SELECT * FROM messages WHERE room=? ORDER BY id ASC
+  `).bind(room).all()
+
+  return json(data.results)
+}
+
+async function getChats(request, env) {
+  const email = new URL(request.url).searchParams.get("email")
+
+  const data = await env.DB.prepare(`
+    SELECT chats.*,
+    CASE WHEN user1=? THEN user2 ELSE user1 END as friend_email
+    FROM chats
+    WHERE user1=? OR user2=?
+    ORDER BY updated_at DESC
+  `)
+  .bind(email, email, email)
+  .all()
+
+  return json(data.results)
+}
+
+async function getContacts(request, env) {
+  const email = new URL(request.url).searchParams.get("email")
+
+  const data = await env.DB.prepare(`
+    SELECT users.name, users.email, users.avatar, users.bio
+    FROM contacts
+    JOIN users ON users.email = contacts.friend_email
+    WHERE contacts.user_email = ?
+  `)
+  .bind(email)
+  .all()
+
+  return json(data.results)
+}
+
+async function updateProfile(request, env) {
+  const { email, name, avatar, bio } = await request.json()
+
+  await env.DB.prepare(`
+    UPDATE users SET name=?,avatar=?,bio=? WHERE email=?
+  `)
+  .bind(name, avatar, bio, email)
+  .run()
+
+  return json({ success: true })
+}
+
+// ================= FRIEND =================
 async function respondRequest(request, env) {
   const { id, action } = await request.json()
 
@@ -280,7 +283,6 @@ async function respondRequest(request, env) {
   return json({ success: true })
 }
 
-// ================= DELETE CONTACT =================
 async function deleteContact(request, env) {
   const { user_email, friend_email } = await request.json()
 
