@@ -207,7 +207,11 @@ export class ChatRoom {
 
           await globalRoom.fetch(new Request("https://internal", {
             method:"POST",
-            body:JSON.stringify(payload)
+            body: JSON.stringify({
+              type:"push_notification",
+              title:"New Message 💬",
+              body:data.text || "📎 File"
+            })
           }))
 
           break
@@ -522,6 +526,18 @@ if (url.pathname === "/login" && request.method === "POST") {
       headers:{ "Content-Type":"application/json", ...cors() }
     })
   }
+  
+  if (url.pathname === "/subscribe" && request.method === "POST") {
+
+  const sub = await request.json()
+
+  await env.DB.prepare(`
+    INSERT INTO push_subscriptions (data)
+    VALUES (?)
+  `).bind(JSON.stringify(sub)).run()
+
+  return new Response("ok", { headers: cors() })
+}
 
     // ================= WS =================
     if (url.pathname === "/ws") {
