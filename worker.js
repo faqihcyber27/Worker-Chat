@@ -45,9 +45,8 @@ export class ChatRoom {
 
       switch(data.type){
 
-        // ================= CONTACTS =================
+        // ================= INIT CONTACTS =================
         case "init_contacts": {
-
           const contacts = await this.env.DB.prepare(`
             SELECT 
               email,
@@ -82,11 +81,10 @@ export class ChatRoom {
             type:"init_contacts",
             contacts: contacts.results || []
           }))
-
           break
         }
 
-        // ================= CHATS (FIX TOTAL) =================
+        // ================= INIT CHATS =================
         case "init_chats": {
 
           const email = data.user
@@ -133,7 +131,7 @@ export class ChatRoom {
                 friend_bio: user?.bio || "",
                 friend_last_seen: user?.last_seen || null,
                 last_message: c.text || (c.file_type ? "📎 File" : ""),
-                unread: 0 // optional (bisa upgrade nanti)
+                unread: 0
               }
             })
           )
@@ -142,16 +140,14 @@ export class ChatRoom {
             type:"init_chats",
             chats: result
           }))
-
           break
         }
 
-        // ================= MESSAGES (HISTORY) =================
+        // ================= INIT MESSAGES =================
         case "init_messages": {
 
           let [u1, u2] = data.room.split("_")
           if (u1 > u2) [u1, u2] = [u2, u1]
-
           const room = u1 + "_" + u2
 
           const messages = await this.env.DB.prepare(`
@@ -166,27 +162,22 @@ export class ChatRoom {
             type:"init_messages",
             messages: messages.results || []
           }))
-
           break
         }
 
-        // ================= READ =================
-        case "read": {
-          this.broadcast({
-            type:"read",
-            user:data.user,
-            room:data.room
-          }, server.room)
-          break
-        }
+        // ================= INIT REQUEST =================
+        case "init_requests": {
 
-        // ================= TYPING =================
-        case "typing": {
-          this.broadcast({
-            type:"typing",
-            sender:data.sender,
-            room:server.room
-          }, server.room)
+          const dataReq = await this.env.DB.prepare(`
+            SELECT * FROM contact_requests
+            WHERE to_email = ?
+            ORDER BY id DESC
+          `).bind(data.user).all()
+
+          server.send(JSON.stringify({
+            type:"request_list",
+            data: dataReq.results || []
+          }))
           break
         }
 
@@ -218,7 +209,6 @@ export class ChatRoom {
 
           let [u1, u2] = data.room.split("_")
           if (u1 > u2) [u1, u2] = [u2, u1]
-
           const room = u1 + "_" + u2
 
           await this.env.DB.prepare(`
@@ -242,15 +232,11 @@ export class ChatRoom {
             sender:data.sender,
             text:data.text || null,
             file:data.file || null,
-            file_name:data.file_name || null,
-            file_type:data.file_type || null,
             created_at:now
           }
 
-          // ROOM
           this.broadcast(payload, server.room)
 
-          // GLOBAL UPDATE (update chats realtime)
           const globalId = this.env.CHAT_ROOM.idFromName("global")
           const globalRoom = this.env.CHAT_ROOM.get(globalId)
 
@@ -261,31 +247,9 @@ export class ChatRoom {
 
           break
         }
-        case "contact_update": {
-
-          // broadcast ke semua user (global room)
-          this.broadcast({
-          type:"contact_update"
-        })
-
-        break
-      }
 
       }
 
-    })
-
-    server.addEventListener("close", async () => {
-      this.sessions.delete(server)
-
-      for (const [email, ws] of this.onlineUsers) {
-        if (ws === server) this.onlineUsers.delete(email)
-      }
-
-      this.broadcast({
-        type:"online_list",
-        users:Array.from(this.onlineUsers.keys())
-      })
     })
 
     return new Response(null, {
@@ -304,150 +268,82 @@ export default {
     }
 
     const url = new URL(request.url)
-    
+
     // ================= SEND REQUEST =================
-if (url.pathname === "/send-request" && request.method === "POST") {
+    if (url.pathname === "/send-request" && request.method === "POST") {
 
-  const { from_email, to_email } = await request.json()
-  const now = new Date().toISOString()
+      const { from_email, to_email } = await request.json()
+      const now = new Date().toISOString()
 
-  // VALIDASI
-  if (!from_email || !to_email || from_email === to_email) {
-    return new Response(JSON.stringify({ error:"invalid request" }), { headers:cors() })
-  }
+      const result = await env.DB.prepare(`
+        INSERT INTO contact_requests (from_email,to_email,created_at)
+        VALUES (?,?,?)
+      `).bind(from_email, to_email, now).run()
 
-  // CEK USER ADA
-  const user = await env.DB.prepare(`
-    SELECT email FROM users WHERE email=?
-  `).bind(to_email).first()
+      const globalId = env.CHAT_ROOM.idFromName("global")
+      const globalRoom = env.CHAT_ROOM.get(globalId)
 
-  if (!user) {
-    return new Response(JSON.stringify({ error:"user not found" }), { headers:cors() })
-  }
+      await globalRoom.fetch(new Request("https://internal", {
+        method:"POST",
+        body: JSON.stringify({
+          type:"new_request",
+          data:{
+            id: result.meta.last_row_id,
+            from_email,
+            to_email
+          }
+        })
+      }))
 
-  // CEK SUDAH REQUEST
-  const exists = await env.DB.prepare(`
-    SELECT * FROM contact_requests
-    WHERE from_email=? AND to_email=?
-  `).bind(from_email, to_email).first()
-
-  if (exists) {
-    return new Response(JSON.stringify({ error:"already requested" }), { headers:cors() })
-  }
-
-  // ✅ INSERT KE REQUEST (BUKAN CONTACTS)
-  await env.DB.prepare(`
-    INSERT INTO contact_requests (from_email,to_email,created_at)
-    VALUES (?,?,?)
-  `).bind(from_email, to_email, now).run()
-
-  // 🔥 REALTIME NOTIF
-  const globalId = env.CHAT_ROOM.idFromName("global")
-  const globalRoom = env.CHAT_ROOM.get(globalId)
-
-  await globalRoom.fetch(new Request("https://internal", {
-    method:"POST",
-    body: JSON.stringify({
-      type:"contact_request",
-      to: to_email,
-      from: from_email
-    })
-  }))
-
-  return new Response(JSON.stringify({ success:true }), { headers:cors() })
-}
-
-// ================= CONTACT REQUESTS =================
-if (url.pathname === "/contact-requests") {
-
-  const email = url.searchParams.get("email")
-
-  const data = await env.DB.prepare(`
-    SELECT cr.*, u.name, u.avatar
-    FROM contact_requests cr
-    JOIN users u ON u.email = cr.from_email
-    WHERE cr.to_email = ?
-    ORDER BY cr.id DESC
-  `).bind(email).all()
-
-  return new Response(JSON.stringify(data.results || []), {
-    headers:{ "Content-Type":"application/json", ...cors() }
-  })
-}
-
-if (url.pathname === "/accept-request" && request.method === "POST") {
-
-  const { from_email, to_email } = await request.json()
-
-  // insert ke contacts
-  await env.DB.prepare(`
-    INSERT INTO contacts (user_email, friend_email)
-    VALUES (?,?)
-  `).bind(from_email, to_email).run()
-
-  // delete dari request
-  await env.DB.prepare(`
-    DELETE FROM contact_requests
-    WHERE from_email=? AND to_email=?
-  `).bind(from_email, to_email).run()
-
-  // 🔥 update realtime
-  const globalId = env.CHAT_ROOM.idFromName("global")
-  const globalRoom = env.CHAT_ROOM.get(globalId)
-
-  await globalRoom.fetch(new Request("https://internal", {
-    method:"POST",
-    body: JSON.stringify({ type:"contact_update" })
-  }))
-
-  return new Response(JSON.stringify({ success:true }), { headers:cors() })
-}
-
-if (url.pathname === "/reject-request" && request.method === "POST") {
-
-  const { from_email, to_email } = await request.json()
-
-  await env.DB.prepare(`
-    DELETE FROM contact_requests
-    WHERE from_email=? AND to_email=?
-  `).bind(from_email, to_email).run()
-
-  return new Response(JSON.stringify({ success:true }), { headers:cors() })
-}
-
-    // ================= DELETE CONTACT =================
-if (url.pathname === "/delete-contact" && request.method === "POST") {
-
-  const body = await request.json()
-  const { user_email, friend_email } = body
-
-  // 🔥 DELETE DUA ARAH (INI YANG PENTING)
-  await env.DB.prepare(`
-    DELETE FROM contacts
-    WHERE (user_email = ? AND friend_email = ?)
-       OR (user_email = ? AND friend_email = ?)
-  `)
-  .bind(user_email, friend_email, friend_email, user_email)
-  .run()
-
-  // 🔥 BROADCAST REALTIME (TIDAK PERLU FRONTEND TRIGGER LAGI)
-  const globalId = env.CHAT_ROOM.idFromName("global")
-  const globalRoom = env.CHAT_ROOM.get(globalId)
-
-  await globalRoom.fetch(new Request("https://internal", {
-    method: "POST",
-    body: JSON.stringify({
-      type: "contact_update"
-    })
-  }))
-
-  return new Response(JSON.stringify({ success: true }), {
-    headers: { 
-      "Content-Type": "application/json",
-      ...cors()
+      return new Response(JSON.stringify({ success:true }), { headers:cors() })
     }
-  })
-}
+
+    // ================= RESPOND REQUEST =================
+    if (url.pathname === "/respond-request" && request.method === "POST") {
+
+      const { id, action } = await request.json()
+
+      const req = await env.DB.prepare(`
+        SELECT * FROM contact_requests WHERE id=?
+      `).bind(id).first()
+
+      if (action === "accept") {
+
+        await env.DB.prepare(`
+          INSERT INTO contacts (user_email, friend_email)
+          VALUES (?,?)
+        `).bind(req.from_email, req.to_email).run()
+
+        const globalId = env.CHAT_ROOM.idFromName("global")
+        const globalRoom = env.CHAT_ROOM.get(globalId)
+
+        await globalRoom.fetch(new Request("https://internal", {
+          method:"POST",
+          body: JSON.stringify({
+            type:"request_accepted",
+            to:req.from_email,
+            name:req.to_email
+          })
+        }))
+      }
+
+      await env.DB.prepare(`
+        DELETE FROM contact_requests WHERE id=?
+      `).bind(id).run()
+
+      const globalId = env.CHAT_ROOM.idFromName("global")
+      const globalRoom = env.CHAT_ROOM.get(globalId)
+
+      await globalRoom.fetch(new Request("https://internal", {
+        method:"POST",
+        body: JSON.stringify({
+          type:"request_update",
+          id
+        })
+      }))
+
+      return new Response(JSON.stringify({ success:true }), { headers:cors() })
+    }
 
     if (url.pathname === "/ws") {
       const room = url.searchParams.get("room")
