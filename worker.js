@@ -41,6 +41,55 @@ export class ChatRoom {
     server.addEventListener("message", async (event) => {
       const data = JSON.parse(event.data)
       const now = new Date().toISOString()
+      
+      // ================= INIT CHATS =================
+      if (data.type === "init_chats") {
+
+      const email = data.user
+
+      const dataChats = await this.env.DB.prepare(`
+        SELECT 
+          chats.*,
+          CASE 
+            WHEN chats.user1 = ? THEN chats.user2
+            ELSE chats.user1
+          END as friend_email
+        FROM chats
+        WHERE chats.user1 = ? OR chats.user2 = ?
+        ORDER BY chats.updated_at DESC
+      `)
+      .bind(email, email, email)
+      .all()
+
+      const result = await Promise.all(
+        dataChats.results.map(async (c) => {
+
+          const user = await this.env.DB.prepare(`
+            SELECT name, avatar, bio, last_seen 
+            FROM users 
+            WHERE email = ?
+          `)
+          .bind(c.friend_email)
+          .first()
+
+          return {
+            ...c,
+            friend_name: user?.name || c.friend_email,
+            friend_avatar: user?.avatar || null,
+            friend_bio: user?.bio || "",
+            friend_last_seen: user?.last_seen || null
+          }
+        })
+      )
+
+      server.send(JSON.stringify({
+        type: "init_chats",
+        chats: result
+      }))
+
+      return
+    }
+      
 
       // ================= INIT MESSAGES =================
       if (data.type === "init_messages") {
@@ -162,7 +211,7 @@ export class ChatRoom {
     }
 
     // 🔥 kirim ke room
-    this.broadcast(payload, server.room)
+    this.broadcast(payload)
 
     // 🔥 kirim ke global (update chat list realtime)
     const globalId = this.env.CHAT_ROOM.idFromName("global")
