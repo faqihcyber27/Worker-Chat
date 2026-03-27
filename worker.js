@@ -242,7 +242,7 @@ export class ChatRoom {
       })
 
       break
-    a}
+    }
 
       }
 
@@ -264,6 +264,59 @@ export default {
     }
 
     const url = new URL(request.url)
+    
+    // ================= REGISTER =================
+if (url.pathname === "/register" && request.method === "POST") {
+
+  const { name, email, password } = await request.json()
+
+  const exist = await env.DB.prepare(`
+    SELECT email FROM users WHERE email=?
+  `).bind(email).first()
+
+  if (exist) {
+    return new Response(JSON.stringify({
+      error:"Email sudah terdaftar"
+    }), { headers:cors() })
+  }
+
+  await env.DB.prepare(`
+    INSERT INTO users (name,email,password)
+    VALUES (?,?,?)
+  `).bind(name,email,password).run()
+
+  return new Response(JSON.stringify({
+    token:"ok",
+    user:{ name,email }
+  }), { headers:cors() })
+}
+
+// ================= LOGIN =================
+if (url.pathname === "/login" && request.method === "POST") {
+
+  const { email, password } = await request.json()
+
+  const user = await env.DB.prepare(`
+    SELECT * FROM users WHERE email=?
+  `).bind(email).first()
+
+  if (!user) {
+    return new Response(JSON.stringify({
+      error:"Email tidak terdaftar"
+    }), { headers:cors() })
+  }
+
+  if (user.password !== password) {
+    return new Response(JSON.stringify({
+      error:"Password salah"
+    }), { headers:cors() })
+  }
+
+  return new Response(JSON.stringify({
+    token:"ok",
+    user
+  }), { headers:cors() })
+}
 
     // ================= SEND REQUEST =================
     if (url.pathname === "/send-request" && request.method === "POST") {
