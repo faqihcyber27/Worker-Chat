@@ -7,20 +7,22 @@ export class ChatRoom {
     this.onlineUsers = new Map()
   }
 
-  // 🔥 HELPER BROADCAST
+  // 🔥 SAFE BROADCAST
   broadcast(payload, roomName = null) {
     for (const s of this.sessions) {
       if (!roomName || s.room === roomName) {
-        try {
-          s.send(JSON.stringify(payload))
-        } catch (e) {}
+        if (s.readyState === 1) {
+          try {
+            s.send(JSON.stringify(payload))
+          } catch (e) {}
+        }
       }
     }
   }
 
   async fetch(request) {
 
-    // 🔥 GLOBAL BROADCAST (INTERNAL)
+    // 🔥 INTERNAL GLOBAL BROADCAST
     if (request.method === "POST") {
       const data = await request.json()
       this.broadcast(data)
@@ -57,7 +59,6 @@ export class ChatRoom {
 
       // ================= TYPING =================
       if (data.type === "typing") {
-
         const user = await this.env.DB.prepare(`
           SELECT name FROM users WHERE email = ?
         `).bind(data.sender).first()
@@ -75,6 +76,13 @@ export class ChatRoom {
       // ================= ONLINE =================
       if (data.type === "online" && roomName === "global") {
 
+        // 🔥 prevent duplicate
+        if (this.onlineUsers.has(data.user)) {
+          try {
+            this.onlineUsers.get(data.user).close()
+          } catch(e){}
+        }
+
         this.onlineUsers.set(data.user, server)
 
         await this.env.DB.prepare(`
@@ -87,7 +95,7 @@ export class ChatRoom {
         }
 
         // local
-        this.broadcast(payload, roomName)
+        this.broadcast(payload)
 
         // global sync
         const globalId = this.env.CHAT_ROOM.idFromName("global")
@@ -148,7 +156,17 @@ export class ChatRoom {
         created_at: now
       }
 
+      // 🔥 ROOM (chat.html)
       this.broadcast(payload, roomName)
+
+      // 🔥 GLOBAL (chats.html)
+      const globalId = this.env.CHAT_ROOM.idFromName("global")
+      const globalRoom = this.env.CHAT_ROOM.get(globalId)
+
+      await globalRoom.fetch(new Request("https://internal", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      }))
 
       // delivered
       this.broadcast({
@@ -156,14 +174,13 @@ export class ChatRoom {
         room: data.room,
         sender: data.sender
       }, roomName)
-
     })
 
     // ================= CLOSE =================
     server.addEventListener("close", async () => {
       this.sessions.delete(server)
 
-      // remove online user
+      // remove online
       for (const [email, ws] of this.onlineUsers) {
         if (ws === server) {
           this.onlineUsers.delete(email)
@@ -175,9 +192,9 @@ export class ChatRoom {
         users: Array.from(this.onlineUsers.keys())
       }
 
-      this.broadcast(payload, roomName)
+      // 🔥 broadcast global
+      this.broadcast(payload)
 
-      // global sync
       const globalId = this.env.CHAT_ROOM.idFromName("global")
       const globalRoom = this.env.CHAT_ROOM.get(globalId)
 
@@ -209,14 +226,6 @@ export default {
       return env.CHAT_ROOM.get(id).fetch(request)
     }
 
-    if (url.pathname === "/messages") {
-      const room = url.searchParams.get("room")
-      const data = await env.DB.prepare(`
-        SELECT * FROM messages WHERE room = ? ORDER BY id ASC
-      `).bind(room).all()
-      return json(data.results)
-    }
-
     if (url.pathname === "/respond-request")
       return respondRequest(request, env)
 
@@ -227,7 +236,7 @@ export default {
   }
 }
 
-// ================= 🔥 FRIEND ACCEPT REALTIME =================
+// ================= FRIEND ACCEPT =================
 async function respondRequest(request, env) {
   const { id, action } = await request.json()
 
@@ -253,7 +262,6 @@ async function respondRequest(request, env) {
       VALUES (?, ?, ?)
     `).bind(req.to_email, req.from_email, new Date().toISOString()).run()
 
-    // 🔥 REALTIME EVENT
     const payload = {
       type: "friend_accept",
       from: req.from_email,
@@ -272,7 +280,7 @@ async function respondRequest(request, env) {
   return json({ success: true })
 }
 
-// ================= 🔥 DELETE CONTACT REALTIME =================
+// ================= DELETE CONTACT =================
 async function deleteContact(request, env) {
   const { user_email, friend_email } = await request.json()
 
