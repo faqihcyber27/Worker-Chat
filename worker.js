@@ -45,8 +45,15 @@ export class ChatRoom {
       if(data.type==="init_contacts"){
 
   const contacts = await this.env.DB.prepare(`
-    SELECT 
-      u.email, u.name, u.avatar, u.bio, u.last_seen
+    SELECT DISTINCT
+      CASE 
+        WHEN c.user_email = ? THEN c.friend_email
+        ELSE c.user_email
+      END as email,
+      u.name,
+      u.avatar,
+      u.bio,
+      u.last_seen
     FROM contacts c
     JOIN users u 
       ON u.email = CASE 
@@ -55,7 +62,7 @@ export class ChatRoom {
       END
     WHERE c.user_email = ? OR c.friend_email = ?
   `)
-  .bind(data.user, data.user, data.user)
+  .bind(data.user, data.user, data.user, data.user)
   .all()
 
   server.send(JSON.stringify({
