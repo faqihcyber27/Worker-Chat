@@ -43,15 +43,16 @@ export class ChatRoom {
       const now = new Date().toISOString()
       
       if(data.type==="init_contacts"){
+
   const contacts = await this.env.DB.prepare(`
-    SELECT u.email, u.name, u.avatar, u.bio, u.last_seen
+    SELECT 
+      u.email, u.name, u.avatar, u.bio, u.last_seen
     FROM contacts c
-    JOIN users u ON (
-      CASE 
-        WHEN c.user_email = ? THEN c.friend_email = u.email
-        ELSE c.user_email = u.email
+    JOIN users u 
+      ON u.email = CASE 
+        WHEN c.user_email = ? THEN c.friend_email
+        ELSE c.user_email
       END
-    )
     WHERE c.user_email = ? OR c.friend_email = ?
   `)
   .bind(data.user, data.user, data.user)
