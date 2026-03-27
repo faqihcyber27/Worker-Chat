@@ -230,19 +230,30 @@ export class ChatRoom {
         .bind(data.name, data.bio, data.avatar, data.email)
         .run()
 
-        // 🔥 broadcast ke semua user
-        this.broadcast({
-          type:"profile_update",
-          user:{
-            email:data.email,
-            name:data.name,
-            bio:data.bio,
-            avatar:data.avatar
-        }
-      })
+        // 🔥 broadcast global
+        this.broadcast(payload)
+
+        // 🔥 trigger refresh contacts & chats
+        this.broadcast({ type:"contact_update" })
+        this.broadcast({ type:"chat_update" })
 
       break
     }
+    case "read": {
+
+      await this.env.DB.prepare(`
+        UPDATE messages
+        SET is_read=1
+        WHERE room=? AND sender != ?
+      `).bind(data.room, data.user).run()
+
+      this.broadcast({
+        type:"read_update",
+        room:data.room
+      }, server.room)
+
+    break
+  }
 
       }
 
