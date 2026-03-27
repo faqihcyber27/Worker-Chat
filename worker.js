@@ -229,16 +229,39 @@ export class ChatRoom {
         `)
         .bind(data.name, data.bio, data.avatar, data.email)
         .run()
+        
+        const payload = {
+          type:"profile_update",
+          user:{
+            email:data.email,
+            name:data.name,
+            bio:data.bio,
+            avatar:data.avatar
+          }
+        }
+          // 🔥 KIRIM KE GLOBAL ROOM (INI KUNCI)
+  const globalId = this.env.CHAT_ROOM.idFromName("global")
+  const globalRoom = this.env.CHAT_ROOM.get(globalId)
 
-        // 🔥 broadcast global
-        this.broadcast(payload)
+  await globalRoom.fetch(new Request("https://internal", {
+    method:"POST",
+    body: JSON.stringify(payload)
+  }))
 
-        // 🔥 trigger refresh contacts & chats
-        this.broadcast({ type:"contact_update" })
-        this.broadcast({ type:"chat_update" })
+  // 🔥 TRIGGER REFRESH CONTACT & CHAT
+  await globalRoom.fetch(new Request("https://internal", {
+    method:"POST",
+    body: JSON.stringify({ type:"contact_update" })
+  }))
 
-      break
-    }
+  await globalRoom.fetch(new Request("https://internal", {
+    method:"POST",
+    body: JSON.stringify({ type:"chat_update" })
+  }))
+
+  break
+}
+
     case "read": {
 
       await this.env.DB.prepare(`
