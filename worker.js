@@ -45,7 +45,7 @@ export class ChatRoom {
 
       switch(data.type){
 
-        // ================= INIT CONTACTS =================
+        // ================= CONTACTS =================
         case "init_contacts": {
           const contacts = await this.env.DB.prepare(`
             SELECT 
@@ -84,9 +84,23 @@ export class ChatRoom {
           break
         }
 
-        // ================= INIT CHATS =================
-        case "init_chats": {
+        // ================= INIT REQUEST (FIX POSISI) =================
+        case "init_requests": {
+          const dataReq = await this.env.DB.prepare(`
+            SELECT * FROM contact_requests
+            WHERE to_email = ?
+            ORDER BY id DESC
+          `).bind(data.user).all()
 
+          server.send(JSON.stringify({
+            type:"request_list",
+            data: dataReq.results || []
+          }))
+          break
+        }
+
+        // ================= CHATS =================
+        case "init_chats": {
           const email = data.user
 
           const dataChats = await this.env.DB.prepare(`
@@ -115,12 +129,8 @@ export class ChatRoom {
               const friend_email = parts.find(x => x !== email)
 
               const user = await this.env.DB.prepare(`
-                SELECT name, avatar, bio, last_seen 
-                FROM users 
-                WHERE email = ?
-              `)
-              .bind(friend_email)
-              .first()
+                SELECT name, avatar FROM users WHERE email = ?
+              `).bind(friend_email).first()
 
               return {
                 room: c.room,
@@ -128,10 +138,7 @@ export class ChatRoom {
                 friend_email,
                 friend_name: user?.name || friend_email,
                 friend_avatar: user?.avatar || null,
-                friend_bio: user?.bio || "",
-                friend_last_seen: user?.last_seen || null,
-                last_message: c.text || (c.file_type ? "📎 File" : ""),
-                unread: 0
+                last_message: c.text || "📎 File"
               }
             })
           )
@@ -143,20 +150,15 @@ export class ChatRoom {
           break
         }
 
-        // ================= INIT MESSAGES =================
+        // ================= MESSAGES =================
         case "init_messages": {
-
           let [u1, u2] = data.room.split("_")
           if (u1 > u2) [u1, u2] = [u2, u1]
           const room = u1 + "_" + u2
 
           const messages = await this.env.DB.prepare(`
-            SELECT * FROM messages
-            WHERE room = ?
-            ORDER BY id ASC
-          `)
-          .bind(room)
-          .all()
+            SELECT * FROM messages WHERE room=? ORDER BY id ASC
+          `).bind(room).all()
 
           server.send(JSON.stringify({
             type:"init_messages",
@@ -165,73 +167,36 @@ export class ChatRoom {
           break
         }
 
-        // ================= INIT REQUEST =================
-        case "init_requests": {
-
-          const dataReq = await this.env.DB.prepare(`
-            SELECT * FROM contact_requests
-            WHERE to_email = ?
-            ORDER BY id DESC
-          `).bind(data.user).all()
-
-          server.send(JSON.stringify({
-            type:"request_list",
-            data: dataReq.results || []
-          }))
-          break
-        }
-
         // ================= ONLINE =================
         case "online": {
-
           if(server.room !== "global") break
 
-          if(this.onlineUsers.has(data.user)){
-            try{ this.onlineUsers.get(data.user).close() }catch{}
-          }
-
           this.onlineUsers.set(data.user, server)
-
-          await this.env.DB.prepare(`
-            UPDATE users SET last_seen=? WHERE email=?
-          `).bind(now, data.user).run()
 
           this.broadcast({
             type:"online_list",
             users:Array.from(this.onlineUsers.keys())
           })
-
           break
         }
 
         // ================= MESSAGE =================
         case "message": {
-
           let [u1, u2] = data.room.split("_")
           if (u1 > u2) [u1, u2] = [u2, u1]
           const room = u1 + "_" + u2
 
           await this.env.DB.prepare(`
             INSERT INTO messages
-            (room,sender,text,file,file_name,file_type,created_at,is_read)
-            VALUES(?,?,?,?,?,?,?,0)
-          `)
-          .bind(
-            room,
-            data.sender,
-            data.text || null,
-            data.file || null,
-            data.file_name || null,
-            data.file_type || null,
-            now
-          ).run()
+            (room,sender,text,created_at,is_read)
+            VALUES(?,?,?,?,0)
+          `).bind(room,data.sender,data.text,now).run()
 
           const payload = {
             type:"message",
             room,
             sender:data.sender,
-            text:data.text || null,
-            file:data.file || null,
+            text:data.text,
             created_at:now
           }
 
@@ -245,6 +210,11 @@ export class ChatRoom {
             body:JSON.stringify(payload)
           }))
 
+          break
+        }
+
+        case "contact_update": {
+          this.broadcast({ type:"contact_update" })
           break
         }
 
@@ -280,8 +250,9 @@ export default {
         VALUES (?,?,?)
       `).bind(from_email, to_email, now).run()
 
-      const globalId = env.CHAT_ROOM.idFromName("global")
-      const globalRoom = env.CHAT_ROOM.get(globalId)
+      const globalRoom = env.CHAT_ROOM.get(
+        env.CHAT_ROOM.idFromName("global")
+      )
 
       await globalRoom.fetch(new Request("https://internal", {
         method:"POST",
@@ -298,7 +269,7 @@ export default {
       return new Response(JSON.stringify({ success:true }), { headers:cors() })
     }
 
-    // ================= RESPOND REQUEST =================
+    // ================= RESPOND =================
     if (url.pathname === "/respond-request" && request.method === "POST") {
 
       const { id, action } = await request.json()
@@ -308,14 +279,14 @@ export default {
       `).bind(id).first()
 
       if (action === "accept") {
-
         await env.DB.prepare(`
           INSERT INTO contacts (user_email, friend_email)
           VALUES (?,?)
         `).bind(req.from_email, req.to_email).run()
 
-        const globalId = env.CHAT_ROOM.idFromName("global")
-        const globalRoom = env.CHAT_ROOM.get(globalId)
+        const globalRoom = env.CHAT_ROOM.get(
+          env.CHAT_ROOM.idFromName("global")
+        )
 
         await globalRoom.fetch(new Request("https://internal", {
           method:"POST",
@@ -331,8 +302,9 @@ export default {
         DELETE FROM contact_requests WHERE id=?
       `).bind(id).run()
 
-      const globalId = env.CHAT_ROOM.idFromName("global")
-      const globalRoom = env.CHAT_ROOM.get(globalId)
+      const globalRoom = env.CHAT_ROOM.get(
+        env.CHAT_ROOM.idFromName("global")
+      )
 
       await globalRoom.fetch(new Request("https://internal", {
         method:"POST",
@@ -345,6 +317,32 @@ export default {
       return new Response(JSON.stringify({ success:true }), { headers:cors() })
     }
 
+    // ================= DELETE CONTACT (FIXED) =================
+    if (url.pathname === "/delete-contact" && request.method === "POST") {
+
+      const { user_email, friend_email } = await request.json()
+
+      await env.DB.prepare(`
+        DELETE FROM contacts
+        WHERE (user_email=? AND friend_email=?)
+           OR (user_email=? AND friend_email=?)
+      `).bind(user_email, friend_email, friend_email, user_email).run()
+
+      const globalRoom = env.CHAT_ROOM.get(
+        env.CHAT_ROOM.idFromName("global")
+      )
+
+      await globalRoom.fetch(new Request("https://internal", {
+        method:"POST",
+        body: JSON.stringify({
+          type:"contact_update"
+        })
+      }))
+
+      return new Response(JSON.stringify({ success:true }), { headers:cors() })
+    }
+
+    // ================= WS =================
     if (url.pathname === "/ws") {
       const room = url.searchParams.get("room")
       const id = env.CHAT_ROOM.idFromName(room)
