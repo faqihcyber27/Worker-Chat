@@ -172,54 +172,9 @@ export class ChatRoom {
       method: "POST",
       body: JSON.stringify(payload)
     }))
-
     return
-  }
-
-})
-
-      // ================= MESSAGE =================
-      let [u1, u2] = data.room.split("_")
-      if (u1 > u2) [u1, u2] = [u2, u1]
-
-      await this.env.DB.prepare(`
-        INSERT INTO messages
-        (room,sender,text,file,file_name,file_type,created_at,is_read)
-        VALUES(?,?,?,?,?,?,?,0)
-      `)
-      .bind(
-        data.room,
-        data.sender,
-        data.text || null,
-        data.file || null,
-        data.file_name || null,
-        data.file_type || null,
-        now
-      ).run()
-
-      const payload = {
-        type: "message",
-        room: data.room,
-        sender: data.sender,
-        text: data.text || null,
-        file: data.file || null,
-        file_name: data.file_name || null,
-        file_type: data.file_type || null,
-        created_at: now
-      }
-
-      // ROOM
-      this.broadcast(payload, roomName)
-
-      // GLOBAL (biar chats update)
-      const globalId = this.env.CHAT_ROOM.idFromName("global")
-      const globalRoom = this.env.CHAT_ROOM.get(globalId)
-
-      await globalRoom.fetch(new Request("https://internal", {
-        method: "POST",
-        body: JSON.stringify(payload)
-      }))
-    })
+    }
+  })
 
     server.addEventListener("close", async () => {
     this.sessions.delete(server)
