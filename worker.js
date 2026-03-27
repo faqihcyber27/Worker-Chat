@@ -265,57 +265,101 @@ export default {
 
     const url = new URL(request.url)
     
-    // ================= REGISTER =================
+  // ================= REGISTER =================
 if (url.pathname === "/register" && request.method === "POST") {
 
   const { name, email, password } = await request.json()
 
+  if (!name || !email || !password) {
+    return new Response(JSON.stringify({
+      error: "Semua field wajib diisi"
+    }), { headers: cors() })
+  }
+
+  const cleanEmail = email.trim().toLowerCase()
+
+  // cek user sudah ada
   const exist = await env.DB.prepare(`
     SELECT email FROM users WHERE email=?
-  `).bind(email).first()
+  `).bind(cleanEmail).first()
 
   if (exist) {
     return new Response(JSON.stringify({
-      error:"Email sudah terdaftar"
-    }), { headers:cors() })
+      error: "Email sudah terdaftar"
+    }), { headers: cors() })
   }
 
+  // 🔐 HASH PASSWORD
+  const encoder = new TextEncoder()
+  const data = encoder.encode(password)
+
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+
+  // simpan user
   await env.DB.prepare(`
     INSERT INTO users (name,email,password)
     VALUES (?,?,?)
-  `).bind(name,email,password).run()
+  `).bind(name, cleanEmail, hashHex).run()
 
   return new Response(JSON.stringify({
-    token:"ok",
-    user:{ name,email }
-  }), { headers:cors() })
+    token: "ok",
+    user: {
+      name,
+      email: cleanEmail
+    }
+  }), { headers: cors() })
 }
 
-// ================= LOGIN =================
+  // ================= LOGIN =================
 if (url.pathname === "/login" && request.method === "POST") {
 
   const { email, password } = await request.json()
 
+  if (!email || !password) {
+    return new Response(JSON.stringify({
+      error: "Email dan password wajib"
+    }), { headers: cors() })
+  }
+
+  const cleanEmail = email.trim().toLowerCase()
+
+  // ambil user
   const user = await env.DB.prepare(`
     SELECT * FROM users WHERE email=?
-  `).bind(email).first()
+  `).bind(cleanEmail).first()
 
   if (!user) {
     return new Response(JSON.stringify({
-      error:"Email tidak terdaftar"
-    }), { headers:cors() })
+      error: "Email tidak terdaftar"
+    }), { headers: cors() })
   }
 
-  if (user.password !== password) {
+  // 🔐 HASH PASSWORD INPUT
+  const encoder = new TextEncoder()
+  const data = encoder.encode(password)
+
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+
+  // compare
+  if (user.password !== hashHex) {
     return new Response(JSON.stringify({
-      error:"Password salah"
-    }), { headers:cors() })
+      error: "Password salah"
+    }), { headers: cors() })
   }
 
   return new Response(JSON.stringify({
-    token:"ok",
-    user
-  }), { headers:cors() })
+    token: "ok",
+    user: {
+      email: user.email,
+      name: user.name,
+      avatar: user.avatar,
+      bio: user.bio
+    }
+  }), { headers: cors() })
 }
 
     // ================= SEND REQUEST =================
