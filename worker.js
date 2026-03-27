@@ -7,221 +7,203 @@ export class ChatRoom {
     this.onlineUsers = new Map()
   }
 
+  broadcast(payload, roomName = null) {
+    for (const s of this.sessions) {
+      if (!roomName || s.room === roomName) {
+        try {
+          s.send(JSON.stringify(payload))
+        } catch {}
+      }
+    }
+  }
+
   async fetch(request) {
-    // 🔥 HANDLE BROADCAST GLOBAL
+
+    // 🔥 INTERNAL BROADCAST
     if (request.method === "POST") {
       const data = await request.json()
-    if (data.type === "online_list") {
-      this.onlineUsers = new Map(
-      data.users.map(u => [u, null])
-      )
-    }
-    for (const s of this.sessions) {
-      s.send(JSON.stringify(data))
+      this.broadcast(data)
+      return new Response("ok")
     }
 
-    return new Response("ok")
-  }
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("Expected websocket", { status: 400 })
     }
 
     const pair = new WebSocketPair()
     const [client, server] = Object.values(pair)
-    
-const url = new URL(request.url)
-const roomName = url.searchParams.get("room")
-server.accept()
-server.room = roomName
-this.sessions.add(server)
+
+    const url = new URL(request.url)
+    const roomName = url.searchParams.get("room")
+
+    server.accept()
+    server.room = roomName
+    this.sessions.add(server)
 
     server.addEventListener("message", async (event) => {
-  const data = JSON.parse(event.data)
-  const now = new Date().toISOString()
+      const data = JSON.parse(event.data)
+      const now = new Date().toISOString()
 
-  if (data.type === "read") {
+      // ================= INIT CHATS =================
+      if (data.type === "init_chats") {
 
-  const payload = {
-    type: "read",
-    user: data.user,
-    room: data.room
-  }
+        const email = data.user
 
-  for (const s of this.sessions) {
-  if (s.room === roomName) {
-    s.send(JSON.stringify(payload))
-  }
-}
+        const dataChats = await this.env.DB.prepare(`
+          SELECT 
+            chats.*,
+            CASE 
+              WHEN chats.user1 = ? THEN chats.user2
+              ELSE chats.user1
+            END as friend_email
+          FROM chats
+          WHERE chats.user1 = ? OR chats.user2 = ?
+          ORDER BY chats.updated_at DESC
+        `)
+        .bind(email, email, email)
+        .all()
 
-  return
-}
-  // ================= 🔥 TYPING =================
-  if (data.type === "typing") {
+        const result = await Promise.all(dataChats.results.map(async (c) => {
 
-  const user = await this.env.DB.prepare(`
-    SELECT name, avatar FROM users WHERE email = ?
-  `).bind(data.sender).first()
+          const user = await this.env.DB.prepare(`
+            SELECT name, avatar, bio, last_seen FROM users WHERE email = ?
+          `)
+          .bind(c.friend_email)
+          .first()
 
-  const payload = {
-    type: "typing",
-    sender: data.sender,
-    name: user?.name || data.sender,
-    room: roomName
-  }
+          return {
+            ...c,
+            friend_name: user?.name || c.friend_email,
+            friend_avatar: user?.avatar || null,
+            friend_bio: user?.bio || "",
+            friend_last_seen: user?.last_seen || null
+          }
+        }))
 
-  // 🔥 kirim ke room chat
-  for (const s of this.sessions) {
-    if (s.room === roomName) {
-      s.send(JSON.stringify(payload))
-    }
-}
-  return
-}
+        server.send(JSON.stringify({
+          type: "init_chats",
+          chats: result
+        }))
 
-  // ================= 🔥 ONLINE =================
-  if (data.type === "online" && roomName === "global") {
+        return
+      }
 
-  if (this.onlineUsers.has(data.user)) {
-    try {
-      this.onlineUsers.get(data.user).close()
-    } catch(e){}
-  }
+      // ================= READ =================
+      if (data.type === "read") {
+        this.broadcast({
+          type: "read",
+          user: data.user,
+          room: data.room
+        }, roomName)
+        return
+      }
 
-  this.onlineUsers.set(data.user, server)
+      // ================= TYPING =================
+      if (data.type === "typing") {
+        this.broadcast({
+          type: "typing",
+          sender: data.sender,
+          room: roomName
+        }, roomName)
+        return
+      }
 
-  const now = new Date().toISOString()
+      // ================= ONLINE =================
+      if (data.type === "online" && roomName === "global") {
 
-  await this.env.DB.prepare(`
-    UPDATE users SET last_seen = ? WHERE email = ?
-  `).bind(now, data.user).run()
+        if (this.onlineUsers.has(data.user)) {
+          try { this.onlineUsers.get(data.user).close() } catch {}
+        }
 
-  const payload = {
-    type: "online_list",
-    users: Array.from(this.onlineUsers.keys())
-  }
+        this.onlineUsers.set(data.user, server)
 
-  // ✅ LOCAL
-  for (const s of this.sessions) {
-  if (s.room === roomName) {
-    s.send(JSON.stringify(payload))
-  }
-}
+        await this.env.DB.prepare(`
+          UPDATE users SET last_seen=? WHERE email=?
+        `).bind(now, data.user).run()
 
-  // ✅ GLOBAL (WAJIB ADA)
-  const globalId = this.env.CHAT_ROOM.idFromName("global")
-  const globalRoom = this.env.CHAT_ROOM.get(globalId)
+        const payload = {
+          type: "online_list",
+          users: Array.from(this.onlineUsers.keys())
+        }
 
-  await globalRoom.fetch(new Request("https://internal", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  }))
+        this.broadcast(payload)
 
-  return
-}
+        return
+      }
 
+      // ================= MESSAGE =================
       let [u1, u2] = data.room.split("_")
       if (u1 > u2) [u1, u2] = [u2, u1]
 
       await this.env.DB.prepare(`
-        INSERT INTO messages (
-  room,
-  sender,
-  text,
-  file,
-  file_name,
-  file_type,
-  created_at,
-  is_read
-)
-VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+        INSERT INTO messages
+        (room,sender,text,file,file_name,file_type,created_at,is_read)
+        VALUES(?,?,?,?,?,?,?,0)
       `)
       .bind(
-  data.room,
-  data.sender,
-  data.text || null,
-  data.file || null,
-  data.file_name || null,
-  data.file_type || (data.file ? "image" : null),
-  now
-)
+        data.room,
+        data.sender,
+        data.text || null,
+        data.file || null,
+        data.file_name || null,
+        data.file_type || null,
+        now
+      ).run()
+
+      const lastMsg = data.text || "📎 File"
+
+      // 🔥 FIX: pastikan chats selalu ada
+      await this.env.DB.prepare(`
+        INSERT OR IGNORE INTO chats (user1,user2,last_message,updated_at)
+        VALUES(?,?,?,?)
+      `)
+      .bind(u1, u2, lastMsg, now)
       .run()
 
-      const lastMsg =
-  data.text ||
-  (data.file_type?.includes("image")
-    ? "📷 Foto"
-    : data.file_type
-    ? "📎 File"
-    : data.file
-    ? "📎 File"
-    : "No message")
-
-await this.env.DB.prepare(`
-  INSERT INTO chats (user1, user2, last_message, updated_at)
-  VALUES (?, ?, ?, ?)
-  ON CONFLICT(user1, user2)
-  DO UPDATE SET
-    last_message = excluded.last_message,
-    updated_at = excluded.updated_at
-`)
-.bind(u1, u2, lastMsg, now)
-.run()
+      await this.env.DB.prepare(`
+        UPDATE chats
+        SET last_message=?, updated_at=?
+        WHERE user1=? AND user2=?
+      `)
+      .bind(lastMsg, now, u1, u2)
+      .run()
 
       const payload = {
-  room: data.room,
-  sender: data.sender,
-  text: data.text || null,
-  file: data.file || null,
-  file_name: data.file_name || null,
-  file_type: data.file_type || null,
-  created_at: now
-}
+        type: "message",
+        room: data.room,
+        sender: data.sender,
+        text: data.text || null,
+        file: data.file || null,
+        file_name: data.file_name || null,
+        file_type: data.file_type || null,
+        created_at: now
+      }
 
-for (const s of this.sessions) {
-  if (s.room === roomName) {
-    s.send(JSON.stringify(payload))
-  }
-}
-  // 🔥 KIRIM STATUS DELIVERED
-const deliveredPayload = {
-  type: "delivered",
-  room: data.room,
-  sender: data.sender
-}
-for (const s of this.sessions) {
-  s.send(JSON.stringify(deliveredPayload))
-}
+      // 🔥 ROOM
+      this.broadcast(payload, roomName)
+
+      // 🔥 GLOBAL (biar chats update realtime)
+      const globalId = this.env.CHAT_ROOM.idFromName("global")
+      const globalRoom = this.env.CHAT_ROOM.get(globalId)
+
+      await globalRoom.fetch(new Request("https://internal", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      }))
     })
 
     server.addEventListener("close", () => {
-    this.sessions.delete(server)
-  // 🔥 hapus dari onlineUsers
-    for (const s of this.sessions) {
-      if (s.room === roomName) {
-        s.send(JSON.stringify(deliveredPayload))
+      this.sessions.delete(server)
+
+      for (const [email, ws] of this.onlineUsers) {
+        if (ws === server) this.onlineUsers.delete(email)
       }
-    }
 
-  // 🔥 broadcast ulang
-  const payload = {
-    type: "online_list",
-    users: Array.from(this.onlineUsers.keys())
-  }
-
-  for (const s of this.sessions) {
-  if (s.room === roomName) {
-    s.send(JSON.stringify(payload))
-  }
-}
-  // 🔥 GLOBAL SYNC (WAJIB)
-const globalId = this.env.CHAT_ROOM.idFromName("global")
-const globalRoom = this.env.CHAT_ROOM.get(globalId)
-
-await globalRoom.fetch(new Request("https://internal", {
-  method: "POST",
-  body: JSON.stringify(payload)
-}))
-})
+      this.broadcast({
+        type: "online_list",
+        users: Array.from(this.onlineUsers.keys())
+      })
+    })
 
     return new Response(null, {
       status: 101,
@@ -233,11 +215,12 @@ await globalRoom.fetch(new Request("https://internal", {
 // ================= MAIN =================
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url)
 
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: cors() })
     }
+
+    const url = new URL(request.url)
 
     if (url.pathname === "/ws") {
       const room = url.searchParams.get("room")
@@ -245,379 +228,11 @@ export default {
       return env.CHAT_ROOM.get(id).fetch(request)
     }
 
-    if (url.pathname === "/messages") {
-      const room = url.searchParams.get("room")
-
-      const data = await env.DB.prepare(`
-        SELECT * FROM messages
-        WHERE room = ?
-        ORDER BY id ASC
-      `)
-      .bind(room)
-      .all()
-
-      return json(data.results)
-    }
-
-    // 🔥 TAMBAHAN (AMAN)
-    if (url.pathname === "/mark-read") return markRead(request, env)
-    if (url.pathname === "/delete-chat") return deleteChat(request, env)
-
-    if (url.pathname === "/register") return register(request, env)
-    if (url.pathname === "/login") return login(request, env)
-
-    if (url.pathname === "/send-request") return sendRequest(request, env)
-    if (url.pathname === "/requests") return getRequests(request, env)
-    if (url.pathname === "/respond-request") return respondRequest(request, env)
-
-    if (url.pathname === "/contacts") return getContacts(request, env)
-    if (url.pathname === "/delete-contact") return deleteContact(request, env)
-
-    if (url.pathname === "/chats") return getChats(request, env)
-    if (url.pathname === "/pin-chat") return pinChat(request, env)
-    if (url.pathname === "/update-profile") return updateProfile(request, env)
-
     return new Response("Not found", { status: 404 })
   }
 }
 
-// ================= DELETE CHAT (NEW) =================
-async function deleteChat(request, env) {
-  const { user1, user2 } = await request.json()
-
-  let [u1, u2] = [user1, user2]
-  if (u1 > u2) [u1, u2] = [u2, u1]
-
-  const room = `${u1}_${u2}`
-
-  await env.DB.prepare(`
-    DELETE FROM messages WHERE room = ?
-  `)
-  .bind(room)
-  .run()
-
-  await env.DB.prepare(`
-    DELETE FROM chats WHERE user1 = ? AND user2 = ?
-  `)
-  .bind(u1, u2)
-  .run()
-
-  return json({ success: true })
-}
-
-  // Mark Read
-  async function markRead(request, env) {
-  const { room, user } = await request.json()
-
-  await env.DB.prepare(`
-    UPDATE messages
-    SET is_read = 1
-    WHERE room = ?
-    AND sender != ?
-  `)
-  .bind(room, user)
-  .run()
-
-  return json({ success: true })
-  }
-
-async function pinChat(request, env) {
-  const { user1, user2, pinned } = await request.json()
-
-  let [u1, u2] = [user1, user2]
-  if (u1 > u2) [u1, u2] = [u2, u1]
-
-  await env.DB.prepare(`
-    UPDATE chats
-    SET pinned = ?
-    WHERE user1 = ? AND user2 = ?
-  `)
-  .bind(pinned ? 1 : 0, u1, u2)
-  .run()
-
-  return json({ success: true })
-}
-
-async function updateProfile(request, env) {
-  const { email, name, avatar, bio } = await request.json()
-
-  await env.DB.prepare(`
-    UPDATE users
-    SET name = ?, avatar = ?, bio = ?
-    WHERE email = ?
-  `)
-  .bind(name, avatar, bio, email)
-  .run()
-
-  return json({ success: true })
-}
-
-// ================= AUTH =================
-async function hash(password) {
-  const data = new TextEncoder().encode(password)
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data)
-  return [...new Uint8Array(hashBuffer)]
-    .map(b => b.toString(16).padStart(2, "0"))
-    .join("")
-}
-
-async function register(request, env) {
-  const { name, email, password } = await request.json()
-  const hashed = await hash(password)
-
-  try {
-    await env.DB.prepare(`
-      INSERT INTO users (name, email, password, created_at)
-      VALUES (?, ?, ?, ?)
-    `)
-    .bind(name, email, hashed, new Date().toISOString())
-    .run()
-
-    return json({ success: true })
-  } catch {
-    return json({ error: "Email sudah terdaftar" }, 400)
-  }
-}
-
-async function login(request, env) {
-  const { email, password } = await request.json()
-  const hashed = await hash(password)
-
-  const user = await env.DB.prepare(`
-    SELECT * FROM users WHERE email = ?
-  `).bind(email).first()
-
-  if (!user || user.password !== hashed) {
-    return json({ error: "Login gagal" }, 401)
-  }
-
-  return json({
-    token: btoa(email),
-    user: { name: user.name, email: user.email }
-  })
-}
-
-// ================= FRIEND REQUEST =================
-async function sendRequest(request, env) {
-  const { from_email, to_email } = await request.json()
-
-  if (from_email === to_email) {
-    return json({ error: "Tidak bisa add diri sendiri" }, 400)
-  }
-
-  await env.DB.prepare(`
-    INSERT INTO contact_requests (from_email, to_email, status, created_at)
-    VALUES (?, ?, 'pending', ?)
-  `)
-  .bind(from_email, to_email, new Date().toISOString())
-  .run()
-
-  return json({ success: true })
-}
-
-async function getRequests(request, env) {
-  const email = new URL(request.url).searchParams.get("email")
-
-  const data = await env.DB.prepare(`
-    SELECT * FROM contact_requests
-    WHERE to_email = ? AND status='pending'
-  `).bind(email).all()
-
-  return json(data.results)
-}
-
-async function respondRequest(request, env) {
-  const { id, action } = await request.json()
-
-  const req = await env.DB.prepare(`
-    SELECT * FROM contact_requests WHERE id=?
-  `).bind(id).first()
-
-  if (!req) return json({ error: "Not found" }, 404)
-
-  if (action === "accept") {
-    await env.DB.prepare(`
-      UPDATE contact_requests SET status='accepted' WHERE id=?
-    `).bind(id).run()
-
-    await env.DB.prepare(`
-      INSERT INTO contacts (user_email, friend_email, created_at)
-      VALUES (?, ?, ?)
-    `).bind(req.from_email, req.to_email, new Date().toISOString()).run()
-
-    await env.DB.prepare(`
-      INSERT INTO contacts (user_email, friend_email, created_at)
-      VALUES (?, ?, ?)
-    `).bind(req.to_email, req.from_email, new Date().toISOString()).run()
-  }
-
-  if (action === "reject") {
-    await env.DB.prepare(`
-      UPDATE contact_requests SET status='rejected' WHERE id=?
-    `).bind(id).run()
-  }
-
-  return json({ success: true })
-}
-
-// ================= CONTACT =================
-async function getContacts(request, env) {
-  const email = new URL(request.url).searchParams.get("email")
-
-  const data = await env.DB.prepare(`
-    SELECT users.name, users.email, users.avatar, users.bio
-    FROM contacts
-    JOIN users ON users.email = contacts.friend_email
-    WHERE contacts.user_email = ?
-  `)
-  .bind(email)
-  .all()
-
-  return json(data.results)
-}
-
-async function deleteContact(request, env) {
-  const { user_email, friend_email } = await request.json()
-
-  await env.DB.prepare(`
-    DELETE FROM contacts 
-    WHERE (LOWER(user_email)=LOWER(?) AND LOWER(friend_email)=LOWER(?))
-       OR (LOWER(user_email)=LOWER(?) AND LOWER(friend_email)=LOWER(?))
-  `)
-  .bind(user_email, friend_email, friend_email, user_email)
-  .run()
-
-  return json({ success: true })
-}
-
-// ================= CHAT LIST =================
-async function getChats(request, env) {
-  const email = new URL(request.url).searchParams.get("email")
-
-  let data = await env.DB.prepare(`
-    SELECT 
-      chats.*,
-
-    -- 🔥 UNREAD
-  (
-    SELECT COUNT(*) 
-    FROM messages 
-    WHERE messages.room =
-      CASE 
-        WHEN chats.user1 < chats.user2 
-        THEN chats.user1 || '_' || chats.user2
-        ELSE chats.user2 || '_' || chats.user1
-      END
-    AND messages.sender != ?
-    AND messages.is_read = 0
-  ) as unread,
-
-  -- 🔥 LAST MESSAGE (WAJIB ADA)
-  (
-    SELECT m2.text 
-    FROM messages m2 
-    WHERE m2.room =
-      CASE 
-        WHEN chats.user1 < chats.user2 
-        THEN chats.user1 || '_' || chats.user2
-        ELSE chats.user2 || '_' || chats.user1
-      END
-    ORDER BY m2.created_at DESC
-    LIMIT 1
-  ) as last_message,
-
-  -- 🔥 LAST FILE TYPE (FIXED)
-  (
-    SELECT m2.file_type
-    FROM messages m2
-    WHERE m2.room =
-      CASE 
-        WHEN chats.user1 < chats.user2 
-        THEN chats.user1 || '_' || chats.user2
-        ELSE chats.user2 || '_' || chats.user1
-      END
-    ORDER BY m2.created_at DESC
-    LIMIT 1
-  ) as last_file_type,
-
-  -- 🔥 LAST FILE NAME
-  (
-    SELECT m2.file_name 
-    FROM messages m2 
-    WHERE m2.room =
-      CASE 
-        WHEN chats.user1 < chats.user2 
-        THEN chats.user1 || '_' || chats.user2
-        ELSE chats.user2 || '_' || chats.user1
-      END
-    ORDER BY m2.created_at DESC
-    LIMIT 1
-  ) as last_file_name
-
-FROM chats
-WHERE user1 = ? OR user2 = ?
-ORDER BY updated_at DESC
-  `)
-  .bind(email, email, email)
-  .all()
-
-  if (!data.results.length) {
-    data = await env.DB.prepare(`
-      SELECT 
-        room,
-        MAX(created_at) as updated_at,
-        SUBSTR(room, 1, INSTR(room, '_')-1) as user1,
-        SUBSTR(room, INSTR(room, '_')+1) as user2,
-        (
-          SELECT text FROM messages m2 
-          WHERE m2.room = m1.room 
-          ORDER BY id DESC LIMIT 1
-        ) as last_message
-      FROM messages m1
-      WHERE room LIKE '%' || ? || '%'
-      GROUP BY room
-      ORDER BY updated_at DESC
-    `)
-    .bind(email)
-    .all()
-  }
-
-  // 🔥 MAP KE NAMA
-  const result = await Promise.all(data.results.map(async (c) => {
-
-    const friendEmail =
-      c.user1 === email ? c.user2 : c.user1
-
-    const user = await env.DB.prepare(`
-      SELECT name, avatar, bio, last_seen FROM users WHERE email = ?
-    `)
-    .bind(friendEmail)
-    .first()
-
-    return {
-      ...c,
-      friend_email: friendEmail,
-      friend_name: user?.name || friendEmail,
-      friend_avatar: user?.avatar || null,
-      friend_bio: user?.bio || "",
-      friend_last_seen: user?.last_seen || null
-    }
-  }))
-
-  return json(result)
-}
-
 // ================= HELPER =================
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      ...cors(),
-      "Content-Type": "application/json"
-    }
-  })
-}
-
 function cors() {
   return {
     "Access-Control-Allow-Origin": "*",
