@@ -200,16 +200,55 @@ async function getChats(request, env) {
   const email = new URL(request.url).searchParams.get("email")
 
   const data = await env.DB.prepare(`
-    SELECT chats.*,
-    CASE WHEN user1=? THEN user2 ELSE user1 END as friend_email
+    SELECT 
+      chats.*,
+
+      -- friend email
+      CASE 
+        WHEN chats.user1 = ? THEN chats.user2
+        ELSE chats.user1
+      END as friend_email,
+
+      -- unread count
+      (
+        SELECT COUNT(*) 
+        FROM messages 
+        WHERE messages.room =
+          CASE 
+            WHEN chats.user1 < chats.user2 
+            THEN chats.user1 || '_' || chats.user2
+            ELSE chats.user2 || '_' || chats.user1
+          END
+        AND messages.sender != ?
+        AND messages.is_read = 0
+      ) as unread
+
     FROM chats
-    WHERE user1=? OR user2=?
-    ORDER BY updated_at DESC
+    WHERE chats.user1 = ? OR chats.user2 = ?
+    ORDER BY chats.updated_at DESC
   `)
-  .bind(email, email, email)
+  .bind(email, email, email, email)
   .all()
 
-  return json(data.results)
+  // 🔥 MAP USER DETAIL (INI YANG HILANG)
+  const result = await Promise.all(data.results.map(async (c) => {
+
+    const user = await env.DB.prepare(`
+      SELECT name, avatar, bio, last_seen FROM users WHERE email = ?
+    `)
+    .bind(c.friend_email)
+    .first()
+
+    return {
+      ...c,
+      friend_name: user?.name || c.friend_email,
+      friend_avatar: user?.avatar || null,
+      friend_bio: user?.bio || "",
+      friend_last_seen: user?.last_seen || null
+    }
+  }))
+
+  return json(result)
 }
 
 async function getContacts(request, env) {
