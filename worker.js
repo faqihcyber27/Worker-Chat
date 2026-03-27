@@ -108,13 +108,21 @@ export class ChatRoom {
 
       const lastMsg = data.text || "📎 File"
 
+      // 🔥 PASTIKAN ROW ADA
       await this.env.DB.prepare(`
-        INSERT INTO chats (user1,user2,last_message,updated_at)
+        INSERT OR IGNORE INTO chats (user1,user2,last_message,updated_at)
         VALUES(?,?,?,?)
-        ON CONFLICT(user1,user2)
-        DO UPDATE SET last_message=excluded.last_message,updated_at=excluded.updated_at
-      `)
+        `)
       .bind(u1, u2, lastMsg, now)
+      .run()
+
+      // 🔥 UPDATE PASTI
+      await this.env.DB.prepare(`
+        UPDATE chats
+        SET last_message=?, updated_at=?
+        WHERE user1=? AND user2=?
+        `)
+      .bind(lastMsg, now, u1, u2)
       .run()
 
       const payload = {
