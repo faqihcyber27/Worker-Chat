@@ -305,68 +305,114 @@ export default {
 
     const url = new URL(request.url)
     
-    // ================= SEND FRIEND REQUEST =================
+    // ================= SEND REQUEST =================
 if (url.pathname === "/send-request" && request.method === "POST") {
 
-  const body = await request.json()
-  const { from_email, to_email } = body
+  const { from_email, to_email } = await request.json()
+  const now = new Date().toISOString()
 
-  // ❌ VALIDASI
+  // VALIDASI
   if (!from_email || !to_email || from_email === to_email) {
-    return new Response(JSON.stringify({ error: "invalid request" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json", ...cors() }
-    })
+    return new Response(JSON.stringify({ error:"invalid request" }), { headers:cors() })
   }
 
-  // 🔍 CEK USER ADA
+  // CEK USER ADA
   const user = await env.DB.prepare(`
-    SELECT email FROM users WHERE email = ?
+    SELECT email FROM users WHERE email=?
   `).bind(to_email).first()
 
   if (!user) {
-    return new Response(JSON.stringify({ error: "user not found" }), {
-      status: 404,
-      headers: { "Content-Type": "application/json", ...cors() }
-    })
+    return new Response(JSON.stringify({ error:"user not found" }), { headers:cors() })
   }
 
-  // 🔍 CEK SUDAH BERTEMAN
+  // CEK SUDAH REQUEST
   const exists = await env.DB.prepare(`
-    SELECT * FROM contacts
-    WHERE (user_email = ? AND friend_email = ?)
-       OR (user_email = ? AND friend_email = ?)
-  `)
-  .bind(from_email, to_email, to_email, from_email)
-  .first()
+    SELECT * FROM contact_requests
+    WHERE from_email=? AND to_email=?
+  `).bind(from_email, to_email).first()
 
   if (exists) {
-    return new Response(JSON.stringify({ error: "already friends" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json", ...cors() }
-    })
+    return new Response(JSON.stringify({ error:"already requested" }), { headers:cors() })
   }
 
-  // ✅ INSERT LANGSUNG (AUTO ACCEPT)
+  // ✅ INSERT KE REQUEST (BUKAN CONTACTS)
   await env.DB.prepare(`
-    INSERT INTO contacts (user_email, friend_email)
-    VALUES (?, ?)
-  `).bind(from_email, to_email).run()
+    INSERT INTO contact_requests (from_email,to_email,created_at)
+    VALUES (?,?,?)
+  `).bind(from_email, to_email, now).run()
 
-  // 🔥 REALTIME UPDATE CONTACTS
+  // 🔥 REALTIME NOTIF
   const globalId = env.CHAT_ROOM.idFromName("global")
   const globalRoom = env.CHAT_ROOM.get(globalId)
 
   await globalRoom.fetch(new Request("https://internal", {
-    method: "POST",
+    method:"POST",
     body: JSON.stringify({
-      type: "contact_update"
+      type:"contact_request",
+      to: to_email,
+      from: from_email
     })
   }))
 
-  return new Response(JSON.stringify({ success: true }), {
-    headers: { "Content-Type": "application/json", ...cors() }
+  return new Response(JSON.stringify({ success:true }), { headers:cors() })
+}
+
+// ================= CONTACT REQUESTS =================
+if (url.pathname === "/contact-requests") {
+
+  const email = url.searchParams.get("email")
+
+  const data = await env.DB.prepare(`
+    SELECT cr.*, u.name, u.avatar
+    FROM contact_requests cr
+    JOIN users u ON u.email = cr.from_email
+    WHERE cr.to_email = ?
+    ORDER BY cr.id DESC
+  `).bind(email).all()
+
+  return new Response(JSON.stringify(data.results || []), {
+    headers:{ "Content-Type":"application/json", ...cors() }
   })
+}
+
+if (url.pathname === "/accept-request" && request.method === "POST") {
+
+  const { from_email, to_email } = await request.json()
+
+  // insert ke contacts
+  await env.DB.prepare(`
+    INSERT INTO contacts (user_email, friend_email)
+    VALUES (?,?)
+  `).bind(from_email, to_email).run()
+
+  // delete dari request
+  await env.DB.prepare(`
+    DELETE FROM contact_requests
+    WHERE from_email=? AND to_email=?
+  `).bind(from_email, to_email).run()
+
+  // 🔥 update realtime
+  const globalId = env.CHAT_ROOM.idFromName("global")
+  const globalRoom = env.CHAT_ROOM.get(globalId)
+
+  await globalRoom.fetch(new Request("https://internal", {
+    method:"POST",
+    body: JSON.stringify({ type:"contact_update" })
+  }))
+
+  return new Response(JSON.stringify({ success:true }), { headers:cors() })
+}
+
+if (url.pathname === "/reject-request" && request.method === "POST") {
+
+  const { from_email, to_email } = await request.json()
+
+  await env.DB.prepare(`
+    DELETE FROM contact_requests
+    WHERE from_email=? AND to_email=?
+  `).bind(from_email, to_email).run()
+
+  return new Response(JSON.stringify({ success:true }), { headers:cors() })
 }
 
     // ================= DELETE CONTACT =================
