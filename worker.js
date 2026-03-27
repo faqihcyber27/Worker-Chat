@@ -41,8 +41,31 @@ export class ChatRoom {
     server.addEventListener("message", async (event) => {
       const data = JSON.parse(event.data)
       const now = new Date().toISOString()
+      
+      if(data.type==="init_contacts"){
+  const contacts = await this.env.DB.prepare(`
+    SELECT u.email, u.name, u.avatar, u.bio, u.last_seen
+    FROM contacts c
+    JOIN users u ON (
+      CASE 
+        WHEN c.user_email = ? THEN c.friend_email = u.email
+        ELSE c.user_email = u.email
+      END
+    )
+    WHERE c.user_email = ? OR c.friend_email = ?
+  `)
+  .bind(data.user, data.user, data.user)
+  .all()
 
-      // ================= INIT CHATS =================
+  server.send(JSON.stringify({
+    type:"init_contacts",
+    contacts: contacts.results || []
+  }))
+
+  return
+}
+
+      // ================= 🔥 INIT CHATS (FIX TOTAL) =================
       if (data.type === "init_chats") {
 
         const email = data.user
@@ -72,15 +95,14 @@ export class ChatRoom {
           const friend_email = parts.find(x => x !== email)
 
           const user = await this.env.DB.prepare(`
-            SELECT name, avatar, bio, last_seen 
-            FROM users WHERE email = ?
+            SELECT name, avatar, bio, last_seen FROM users WHERE email = ?
           `)
           .bind(friend_email)
           .first()
 
           return {
             room: c.room,
-            updated_at: c.created_at,
+            updated_at: c.updated_at,
             friend_email,
             friend_name: user?.name || friend_email,
             friend_avatar: user?.avatar || null,
@@ -98,32 +120,13 @@ export class ChatRoom {
         return
       }
 
-      // ================= INIT MESSAGES =================
-      if (data.type === "init_messages") {
-
-        const messages = await this.env.DB.prepare(`
-          SELECT * FROM messages
-          WHERE room = ?
-          ORDER BY id ASC
-        `)
-        .bind(data.room)
-        .all()
-
-        server.send(JSON.stringify({
-          type: "init_messages",
-          messages: messages.results || []
-        }))
-
-        return
-      }
-
       // ================= READ =================
       if (data.type === "read") {
         this.broadcast({
           type: "read",
           user: data.user,
           room: data.room
-        }, data.room)
+        }, roomName)
         return
       }
 
@@ -132,18 +135,16 @@ export class ChatRoom {
         this.broadcast({
           type: "typing",
           sender: data.sender,
-          room: data.room
-        }, data.room)
+          room: roomName
+        }, roomName)
         return
       }
 
-      // ================= ONLINE =================
+      // =================  =================
       if (data.type === "online" && roomName === "global") {
-
         if (this.onlineUsers.has(data.user)) {
           try { this.onlineUsers.get(data.user).close() } catch {}
         }
-
         this.onlineUsers.set(data.user, server)
 
         await this.env.DB.prepare(`
@@ -154,68 +155,84 @@ export class ChatRoom {
           type: "online_list",
           users: Array.from(this.onlineUsers.keys())
         }
-
         this.broadcast(payload)
+        // 🔥 GLOBAL SYNC (SEMUA ROOM)
+        const globalId = this.env.CHAT_ROOM.idFromName("global")
+        const globalRoom = this.env.CHAT_ROOM.get(globalId)
 
+        await globalRoom.fetch(new Request("https://internal", {
+          method: "POST",
+          body: JSON.stringify(payload)
+      }))
         return
       }
 
       // ================= MESSAGE =================
-      if (data.type === "message") {
+      let [u1, u2] = data.room.split("_")
+      if (u1 > u2) [u1, u2] = [u2, u1]
 
-        let [u1, u2] = data.room.split("_")
-        if (u1 > u2) [u1, u2] = [u2, u1]
+      await this.env.DB.prepare(`
+        INSERT INTO messages
+        (room,sender,text,file,file_name,file_type,created_at,is_read)
+        VALUES(?,?,?,?,?,?,?,0)
+      `)
+      .bind(
+        data.room,
+        data.sender,
+        data.text || null,
+        data.file || null,
+        data.file_name || null,
+        data.file_type || null,
+        now
+      ).run()
 
-        await this.env.DB.prepare(`
-          INSERT INTO messages
-          (room,sender,text,file,file_name,file_type,created_at,is_read)
-          VALUES(?,?,?,?,?,?,?,0)
-        `)
-        .bind(
-          data.room,
-          data.sender,
-          data.text || null,
-          data.file || null,
-          data.file_name || null,
-          data.file_type || null,
-          now
-        )
-        .run()
-
-        const payload = {
-          type: "message",
-          room: data.room,
-          sender: data.sender,
-          text: data.text || null,
-          file: data.file || null,
-          file_name: data.file_name || null,
-          file_type: data.file_type || null,
-          created_at: now
-        }
-
-        // 🔥 kirim ke room chat
-        this.broadcast(payload, data.room)
-
-        // 🔥 kirim ke global (update chats list)
-        this.broadcast(payload)
-
-        return
+      const payload = {
+        type: "message",
+        room: data.room,
+        sender: data.sender,
+        text: data.text || null,
+        file: data.file || null,
+        file_name: data.file_name || null,
+        file_type: data.file_type || null,
+        created_at: now
       }
 
+      // ROOM
+      this.broadcast(payload, roomName)
+
+      // GLOBAL (biar chats update)
+      const globalId = this.env.CHAT_ROOM.idFromName("global")
+      const globalRoom = this.env.CHAT_ROOM.get(globalId)
+
+      await globalRoom.fetch(new Request("https://internal", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      }))
     })
 
-    server.addEventListener("close", () => {
-      this.sessions.delete(server)
+    server.addEventListener("close", async () => {
+    this.sessions.delete(server)
 
-      for (const [email, ws] of this.onlineUsers) {
-        if (ws === server) this.onlineUsers.delete(email)
-      }
+    for (const [email, ws] of this.onlineUsers) {
+      if (ws === server) this.onlineUsers.delete(email)
+    }
 
-      this.broadcast({
-        type: "online_list",
-        users: Array.from(this.onlineUsers.keys())
-      })
-    })
+    const payload = {
+      type: "online_list",
+      users: Array.from(this.onlineUsers.keys())
+    }
+
+    this.broadcast(payload)
+
+    // 🔥 GLOBAL SYNC (INI YANG BUTUH ASYNC)
+    const globalId = this.env.CHAT_ROOM.idFromName("global")
+    const globalRoom = this.env.CHAT_ROOM.get(globalId)
+
+    await globalRoom.fetch(new Request("https://internal", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }))
+  })
 
     return new Response(null, {
       status: 101,
