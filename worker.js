@@ -376,6 +376,21 @@ export default {
 
       return new Response(JSON.stringify({ success:true }), { headers:cors() })
     }
+    
+    if (url.pathname === "/get-profile") {
+
+    const email = url.searchParams.get("email")
+
+    const user = await env.DB.prepare(`
+      SELECT email, name, bio, avatar
+      FROM users
+      WHERE email=?
+    `).bind(email).first()
+
+    return new Response(JSON.stringify(user || {}), {
+      headers:{ "Content-Type":"application/json", ...cors() }
+    })
+  }
 
     // ================= WS =================
     if (url.pathname === "/ws") {
