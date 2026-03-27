@@ -17,7 +17,7 @@ export class ChatRoom {
 
   async fetch(request) {
 
-    // 🔥 INTERNAL BROADCAST
+    // INTERNAL BROADCAST
     if (request.method === "POST") {
       const data = await request.json()
       this.broadcast(data)
@@ -86,57 +86,54 @@ export class ChatRoom {
           break
         }
 
-        // ================= CHATS =================
+        // ================= CHATS (FIX TOTAL) =================
         case "init_chats": {
 
           const email = data.user
 
-          const chats = await this.env.DB.prepare(`
+          const dataChats = await this.env.DB.prepare(`
             SELECT 
-              chats.*,
-
-              CASE 
-                WHEN chats.user1 = ? THEN chats.user2
-                ELSE chats.user1
-              END as friend_email,
-
-              (
-                SELECT COUNT(*) 
-                FROM messages 
-                WHERE messages.room =
-                  CASE 
-                    WHEN chats.user1 < chats.user2 
-                    THEN chats.user1 || '_' || chats.user2
-                    ELSE chats.user2 || '_' || chats.user1
-                  END
-                AND messages.sender != ?
-                AND messages.is_read = 0
-              ) as unread
-
-            FROM chats
-            WHERE chats.user1 = ? OR chats.user2 = ?
-            ORDER BY chats.updated_at DESC
+              m1.room,
+              m1.created_at,
+              m1.text,
+              m1.file_type
+            FROM messages m1
+            INNER JOIN (
+              SELECT room, MAX(created_at) as max_date
+              FROM messages
+              GROUP BY room
+            ) m2
+            ON m1.room = m2.room AND m1.created_at = m2.max_date
+            WHERE m1.room LIKE '%' || ? || '%'
+            ORDER BY m1.created_at DESC
           `)
-          .bind(email, email, email, email)
+          .bind(email)
           .all()
 
           const result = await Promise.all(
-            chats.results.map(async (c) => {
+            dataChats.results.map(async (c) => {
+
+              const parts = c.room.split("_")
+              const friend_email = parts.find(x => x !== email)
 
               const user = await this.env.DB.prepare(`
                 SELECT name, avatar, bio, last_seen 
                 FROM users 
                 WHERE email = ?
               `)
-              .bind(c.friend_email)
+              .bind(friend_email)
               .first()
 
               return {
-                ...c,
-                friend_name: user?.name || c.friend_email,
+                room: c.room,
+                updated_at: c.created_at,
+                friend_email,
+                friend_name: user?.name || friend_email,
                 friend_avatar: user?.avatar || null,
                 friend_bio: user?.bio || "",
-                friend_last_seen: user?.last_seen || null
+                friend_last_seen: user?.last_seen || null,
+                last_message: c.text || (c.file_type ? "📎 File" : ""),
+                unread: 0 // optional (bisa upgrade nanti)
               }
             })
           )
@@ -253,7 +250,7 @@ export class ChatRoom {
           // ROOM
           this.broadcast(payload, server.room)
 
-          // GLOBAL UPDATE (biar chats realtime)
+          // GLOBAL UPDATE (update chats realtime)
           const globalId = this.env.CHAT_ROOM.idFromName("global")
           const globalRoom = this.env.CHAT_ROOM.get(globalId)
 
