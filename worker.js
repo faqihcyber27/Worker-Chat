@@ -49,12 +49,19 @@ export class ChatRoom {
 
         const dataChats = await this.env.DB.prepare(`
           SELECT 
-            room,
-            MAX(created_at) as updated_at
-          FROM messages
-          WHERE room LIKE '%' || ? || '%'
-          GROUP BY room
-          ORDER BY updated_at DESC
+            m1.room,
+            m1.created_at,
+            m1.text,
+            m1.file_type
+          FROM messages m1
+          INNER JOIN (
+            SELECT room, MAX(created_at) as max_date
+            FROM messages
+            GROUP BY room
+          ) m2
+          ON m1.room = m2.room AND m1.created_at = m2.max_date
+          WHERE m1.room LIKE '%' || ? || '%'
+          ORDER BY m1.created_at DESC
         `)
         .bind(email)
         .all()
@@ -78,7 +85,7 @@ export class ChatRoom {
             friend_avatar: user?.avatar || null,
             friend_bio: user?.bio || "",
             friend_last_seen: user?.last_seen || null,
-            last_message: "Chat"
+            last_message: c.text || (c.file_type ? "📎 File" : "")
           }
         }))
 
@@ -110,13 +117,11 @@ export class ChatRoom {
         return
       }
 
-      // ================= ONLINE =================
+      // =================  =================
       if (data.type === "online" && roomName === "global") {
-
         if (this.onlineUsers.has(data.user)) {
           try { this.onlineUsers.get(data.user).close() } catch {}
         }
-
         this.onlineUsers.set(data.user, server)
 
         await this.env.DB.prepare(`
@@ -127,8 +132,15 @@ export class ChatRoom {
           type: "online_list",
           users: Array.from(this.onlineUsers.keys())
         }
-
         this.broadcast(payload)
+        // 🔥 GLOBAL SYNC (SEMUA ROOM)
+        const globalId = this.env.CHAT_ROOM.idFromName("global")
+        const globalRoom = this.env.CHAT_ROOM.get(globalId)
+
+        await globalRoom.fetch(new Request("https://internal", {
+          method: "POST",
+          body: JSON.stringify(payload)
+      }))
         return
       }
 
@@ -181,11 +193,19 @@ export class ChatRoom {
       for (const [email, ws] of this.onlineUsers) {
         if (ws === server) this.onlineUsers.delete(email)
       }
-
-      this.broadcast({
+      const payload = {
         type: "online_list",
         users: Array.from(this.onlineUsers.keys())
-      })
+      }
+
+      this.broadcast(payload)
+      const globalId = this.env.CHAT_ROOM.idFromName("global")
+      const globalRoom = this.env.CHAT_ROOM.get(globalId)
+
+      await globalRoom.fetch(new Request("https://internal", {
+          method: "POST",
+          body: JSON.stringify(payload)
+      }))
     })
 
     return new Response(null, {
