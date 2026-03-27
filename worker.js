@@ -217,6 +217,32 @@ export class ChatRoom {
           this.broadcast({ type:"contact_update" })
           break
         }
+        
+        // ================= PROFILE UPDATE =================
+        case "profile_update": {
+
+        // update DB
+        await this.env.DB.prepare(`
+          UPDATE users
+          SET name=?, bio=?, avatar=?
+          WHERE email=?
+        `)
+        .bind(data.name, data.bio, data.avatar, data.email)
+        .run()
+
+        // 🔥 broadcast ke semua user
+        this.broadcast({
+          type:"profile_update",
+          user:{
+            email:data.email,
+            name:data.name,
+            bio:data.bio,
+            avatar:data.avatar
+        }
+      })
+
+      break
+    a}
 
       }
 
