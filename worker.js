@@ -43,8 +43,8 @@ export class ChatRoom {
       const now = new Date().toISOString()
 
       // ================= 🔥 INIT CHATS (FIX TOTAL) =================
-      if (data.type === "init_messages") {
-    
+      if (data.type === "init_chats") {
+
         const email = data.user
 
         const dataChats = await this.env.DB.prepare(`
