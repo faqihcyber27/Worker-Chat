@@ -99,7 +99,7 @@ export class ChatRoom {
           WHERE room = ?
           ORDER BY id ASC
         `)
-        .bind(data.room)
+        .bind(server.room)
         .all()
 
         server.send(JSON.stringify({
@@ -211,7 +211,7 @@ export class ChatRoom {
     }
 
     // 🔥 kirim ke room
-    this.broadcast(payload)
+    this.broadcast(payload, server.room)
 
     // 🔥 kirim ke global (update chat list realtime)
     const globalId = this.env.CHAT_ROOM.idFromName("global")
