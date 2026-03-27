@@ -42,53 +42,81 @@ export class ChatRoom {
       const data = JSON.parse(event.data)
       const now = new Date().toISOString()
       
-      // ================= INIT CHATS =================
-      if (data.type === "init_chats") {
+     // ================= INIT CHATS =================
+if (data.type === "init_chats") {
 
-      const email = data.user
+  const email = data.user
 
-      const dataChats = await this.env.DB.prepare(`
-        SELECT 
-          chats.*,
+  const dataChats = await this.env.DB.prepare(`
+    SELECT 
+      chats.*,
+
+      CASE 
+        WHEN chats.user1 = ? THEN chats.user2
+        ELSE chats.user1
+      END as friend_email,
+
+      (
+        SELECT COUNT(*) 
+        FROM messages 
+        WHERE messages.room =
           CASE 
-            WHEN chats.user1 = ? THEN chats.user2
-            ELSE chats.user1
-          END as friend_email
-        FROM chats
-        WHERE chats.user1 = ? OR chats.user2 = ?
-        ORDER BY chats.updated_at DESC
+            WHEN chats.user1 < chats.user2 
+            THEN chats.user1 || '_' || chats.user2
+            ELSE chats.user2 || '_' || chats.user1
+          END
+        AND messages.sender != ?
+        AND messages.is_read = 0
+      ) as unread,
+
+      (
+        SELECT m2.text 
+        FROM messages m2 
+        WHERE m2.room =
+          CASE 
+            WHEN chats.user1 < chats.user2 
+            THEN chats.user1 || '_' || chats.user2
+            ELSE chats.user2 || '_' || chats.user1
+          END
+        ORDER BY m2.created_at DESC
+        LIMIT 1
+      ) as last_message
+
+    FROM chats
+    WHERE chats.user1 = ? OR chats.user2 = ?
+    ORDER BY chats.updated_at DESC
+  `)
+  .bind(email, email, email, email)
+  .all()
+
+  const result = await Promise.all(
+    dataChats.results.map(async (c) => {
+
+      const user = await this.env.DB.prepare(`
+        SELECT name, avatar, bio, last_seen 
+        FROM users 
+        WHERE email = ?
       `)
-      .bind(email, email, email)
-      .all()
+      .bind(c.friend_email)
+      .first()
 
-      const result = await Promise.all(
-        dataChats.results.map(async (c) => {
+      return {
+        ...c,
+        friend_name: user?.name || c.friend_email,
+        friend_avatar: user?.avatar || null,
+        friend_bio: user?.bio || "",
+        friend_last_seen: user?.last_seen || null
+      }
+    })
+  )
 
-          const user = await this.env.DB.prepare(`
-            SELECT name, avatar, bio, last_seen 
-            FROM users 
-            WHERE email = ?
-          `)
-          .bind(c.friend_email)
-          .first()
+  server.send(JSON.stringify({
+    type: "init_chats",
+    chats: result
+  }))
 
-          return {
-            ...c,
-            friend_name: user?.name || c.friend_email,
-            friend_avatar: user?.avatar || null,
-            friend_bio: user?.bio || "",
-            friend_last_seen: user?.last_seen || null
-          }
-        })
-      )
-
-      server.send(JSON.stringify({
-        type: "init_chats",
-        chats: result
-      }))
-
-      return
-    }
+  return
+}
       
 
       // ================= INIT MESSAGES =================
