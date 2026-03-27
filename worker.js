@@ -240,15 +240,7 @@ if (data.type === "init_chats") {
 
     // 🔥 kirim ke room
     this.broadcast(payload, server.room)
-
-    // 🔥 kirim ke global (update chat list realtime)
-    const globalId = this.env.CHAT_ROOM.idFromName("global")
-    const globalRoom = this.env.CHAT_ROOM.get(globalId)
-
-    await globalRoom.fetch(new Request("https://internal", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }))
+    this.broadcast(payload)
     return
     }
   })
