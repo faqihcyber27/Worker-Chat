@@ -279,24 +279,33 @@ export default {
       `).bind(id).first()
 
       if (action === "accept") {
+
         await env.DB.prepare(`
           INSERT INTO contacts (user_email, friend_email)
           VALUES (?,?)
         `).bind(req.from_email, req.to_email).run()
 
-        const globalRoom = env.CHAT_ROOM.get(
-          env.CHAT_ROOM.idFromName("global")
-        )
+        const globalId = env.CHAT_ROOM.idFromName("global")
+        const globalRoom = env.CHAT_ROOM.get(globalId)
 
+        // 🔥 NOTIF ACCEPT
         await globalRoom.fetch(new Request("https://internal", {
-          method:"POST",
-          body: JSON.stringify({
+            method:"POST",
+            body: JSON.stringify({
             type:"request_accepted",
             to:req.from_email,
             name:req.to_email
-          })
-        }))
-      }
+        })
+      }))
+
+  // 🔥 PENTING BANGET (INI YANG KAMU BUTUH)
+  await globalRoom.fetch(new Request("https://internal", {
+    method:"POST",
+    body: JSON.stringify({
+      type:"contact_update"
+    })
+  }))
+}
 
       await env.DB.prepare(`
         DELETE FROM contact_requests WHERE id=?
