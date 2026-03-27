@@ -187,26 +187,29 @@ export class ChatRoom {
       }))
     })
 
-    server.addEventListener("close", () => {
-      this.sessions.delete(server)
+    server.addEventListener("close", async () => {
+    this.sessions.delete(server)
 
-      for (const [email, ws] of this.onlineUsers) {
-        if (ws === server) this.onlineUsers.delete(email)
-      }
-      const payload = {
-        type: "online_list",
-        users: Array.from(this.onlineUsers.keys())
-      }
+    for (const [email, ws] of this.onlineUsers) {
+      if (ws === server) this.onlineUsers.delete(email)
+    }
 
-      this.broadcast(payload)
-      const globalId = this.env.CHAT_ROOM.idFromName("global")
-      const globalRoom = this.env.CHAT_ROOM.get(globalId)
+    const payload = {
+      type: "online_list",
+      users: Array.from(this.onlineUsers.keys())
+    }
 
-      await globalRoom.fetch(new Request("https://internal", {
-          method: "POST",
-          body: JSON.stringify(payload)
-      }))
-    })
+    this.broadcast(payload)
+
+    // 🔥 GLOBAL SYNC (INI YANG BUTUH ASYNC)
+    const globalId = this.env.CHAT_ROOM.idFromName("global")
+    const globalRoom = this.env.CHAT_ROOM.get(globalId)
+
+    await globalRoom.fetch(new Request("https://internal", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }))
+  })
 
     return new Response(null, {
       status: 101,
