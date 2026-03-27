@@ -261,6 +261,15 @@ export class ChatRoom {
 
           break
         }
+        case "contact_update": {
+
+          // broadcast ke semua user (global room)
+          this.broadcast({
+          type:"contact_update"
+        })
+
+        break
+      }
 
       }
 
