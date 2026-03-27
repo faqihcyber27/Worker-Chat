@@ -10,9 +10,7 @@ export class ChatRoom {
   broadcast(payload, roomName = null) {
     for (const s of this.sessions) {
       if (!roomName || s.room === roomName) {
-        try {
-          s.send(JSON.stringify(payload))
-        } catch {}
+        try { s.send(JSON.stringify(payload)) } catch {}
       }
     }
   }
@@ -44,39 +42,43 @@ export class ChatRoom {
       const data = JSON.parse(event.data)
       const now = new Date().toISOString()
 
-      // ================= INIT CHATS =================
+      // ================= 🔥 INIT CHATS (FIX TOTAL) =================
       if (data.type === "init_chats") {
 
         const email = data.user
 
         const dataChats = await this.env.DB.prepare(`
           SELECT 
-            chats.*,
-            CASE 
-              WHEN chats.user1 = ? THEN chats.user2
-              ELSE chats.user1
-            END as friend_email
-          FROM chats
-          WHERE chats.user1 = ? OR chats.user2 = ?
-          ORDER BY chats.updated_at DESC
+            room,
+            MAX(created_at) as updated_at
+          FROM messages
+          WHERE room LIKE '%' || ? || '%'
+          GROUP BY room
+          ORDER BY updated_at DESC
         `)
-        .bind(email, email, email)
+        .bind(email)
         .all()
 
         const result = await Promise.all(dataChats.results.map(async (c) => {
 
+          const parts = c.room.split("_")
+          const friend_email = parts.find(x => x !== email)
+
           const user = await this.env.DB.prepare(`
             SELECT name, avatar, bio, last_seen FROM users WHERE email = ?
           `)
-          .bind(c.friend_email)
+          .bind(friend_email)
           .first()
 
           return {
-            ...c,
-            friend_name: user?.name || c.friend_email,
+            room: c.room,
+            updated_at: c.updated_at,
+            friend_email,
+            friend_name: user?.name || friend_email,
             friend_avatar: user?.avatar || null,
             friend_bio: user?.bio || "",
-            friend_last_seen: user?.last_seen || null
+            friend_last_seen: user?.last_seen || null,
+            last_message: "Chat"
           }
         }))
 
@@ -127,7 +129,6 @@ export class ChatRoom {
         }
 
         this.broadcast(payload)
-
         return
       }
 
@@ -150,24 +151,6 @@ export class ChatRoom {
         now
       ).run()
 
-      const lastMsg = data.text || "📎 File"
-
-      // 🔥 FIX: pastikan chats selalu ada
-      await this.env.DB.prepare(`
-        INSERT OR IGNORE INTO chats (user1,user2,last_message,updated_at)
-        VALUES(?,?,?,?)
-      `)
-      .bind(u1, u2, lastMsg, now)
-      .run()
-
-      await this.env.DB.prepare(`
-        UPDATE chats
-        SET last_message=?, updated_at=?
-        WHERE user1=? AND user2=?
-      `)
-      .bind(lastMsg, now, u1, u2)
-      .run()
-
       const payload = {
         type: "message",
         room: data.room,
@@ -179,10 +162,10 @@ export class ChatRoom {
         created_at: now
       }
 
-      // 🔥 ROOM
+      // ROOM
       this.broadcast(payload, roomName)
 
-      // 🔥 GLOBAL (biar chats update realtime)
+      // GLOBAL (biar chats update)
       const globalId = this.env.CHAT_ROOM.idFromName("global")
       const globalRoom = this.env.CHAT_ROOM.get(globalId)
 
