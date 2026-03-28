@@ -213,32 +213,36 @@ export class ChatRoom {
               body:data.text || "📎 File"
             })
           }))
-          // ================= FCM PUSH =================
+         // ================= FCM PUSH =================
+const accessToken = await getAccessToken(this.env)
+
 const tokens = await this.env.DB.prepare(`
   SELECT token FROM fcm_tokens
 `).all()
 
 for (const t of tokens.results) {
-  try {
-    await fetch("https://fcm.googleapis.com/fcm/send", {
+
+  await fetch(
+    `https://fcm.googleapis.com/v1/projects/${this.env.FCM_PROJECT_ID}/messages:send`,
+    {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        "Authorization": "BMicSwmyrhTRTPuFZO-S2pm3ymIZ43RT-KcnQnWw2Z0_TIwDPRLa1EZLPNiSiwkoKiDQxNt7cNJQD3f3iCCgwb0"
+        "Authorization": "Bearer " + accessToken,
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        to: t.token,
-        notification: {
-          title: data.sender,
-          body: data.text || "📎 File"
+        message: {
+          token: t.token,
+          notification: {
+            title: data.sender,
+            body: data.text || "📎 File"
+          }
         }
       })
-    })
-  } catch(e){
-    console.log("FCM ERROR:", e)
-  }
+    }
+  )
 }
-
+          
           break
         }
 
@@ -645,4 +649,94 @@ function cors() {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "*"
   }
+}
+
+async function getAccessToken(env) {
+
+  const header = {
+    alg: "RS256",
+    typ: "JWT"
+  }
+
+  const now = Math.floor(Date.now() / 1000)
+
+  const payload = {
+    iss: env.FCM_CLIENT_EMAIL,
+    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600
+  }
+
+  function base64url(obj){
+    return btoa(JSON.stringify(obj))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "")
+  }
+
+  const enc = new TextEncoder()
+
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    str2ab(env.FCM_PRIVATE_KEY),
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      hash: "SHA-256"
+    },
+    false,
+    ["sign"]
+  )
+
+  const data = enc.encode(
+    base64url(header) + "." + base64url(payload)
+  )
+
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    key,
+    data
+  )
+
+  const jwt =
+    base64url(header) + "." +
+    base64url(payload) + "." +
+    arrayBufferToBase64Url(signature)
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: {"Content-Type":"application/x-www-form-urlencoded"},
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt
+    })
+  })
+
+  const json = await res.json()
+  return json.access_token
+}
+
+function str2ab(str){
+  // hapus header & newline
+  const cleaned = str
+    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
+    .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\n/g, "")
+
+  const binary = atob(cleaned)
+  const buf = new ArrayBuffer(binary.length)
+  const view = new Uint8Array(buf)
+
+  for (let i = 0; i < binary.length; i++) {
+    view[i] = binary.charCodeAt(i)
+  }
+
+  return buf
+}
+
+function arrayBufferToBase64Url(buffer){
+  return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+    .replace(/\+/g,"-")
+    .replace(/\//g,"_")
+    .replace(/=+$/,"")
 }
