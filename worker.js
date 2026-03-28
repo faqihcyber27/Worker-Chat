@@ -126,9 +126,8 @@ export class ChatRoom {
         
         case "init_chats": {
 
-  const email = data.user
+  const email = data.user.toLowerCase().trim()
 
-  // 🔥 ambil semua messages
   const rows = await this.env.DB.prepare(`
     SELECT room, text, created_at
     FROM messages
@@ -139,12 +138,10 @@ export class ChatRoom {
 
   for(const m of (rows.results || [])){
 
-    const [u1,u2] = m.room.split("_")
+    const parts = m.room.split("_").map(x=>x.toLowerCase().trim())
 
-    // hanya ambil room milik user ini
-    if(u1 !== email && u2 !== email) continue
+    if(!parts.includes(email)) continue
 
-    // ambil hanya latest per room
     if(!map.has(m.room)){
       map.set(m.room, m)
     }
@@ -154,7 +151,11 @@ export class ChatRoom {
     [...map.values()].map(async (m)=>{
 
       const room = m.room
-      const friend = room.split("_").find(x=>x!==email)
+
+      const friend = room
+        .split("_")
+        .map(x=>x.toLowerCase().trim())
+        .find(x=>x !== email)
 
       const user = await this.env.DB.prepare(`
         SELECT name, avatar FROM users WHERE email=?
