@@ -111,18 +111,22 @@ export class ChatRoom {
 
         // ================= INIT MESSAGES =================
         case "init_messages": {
-          const messages = await this.env.DB.prepare(`
-            SELECT * FROM messages
-            WHERE room=?
-            ORDER BY id ASC
-          `).bind(data.room).all()
 
-          this.send(server, {
-            type:"init_messages",
-            messages:messages.results || []
-          })
-          break
-        }
+  const room = data.room
+
+  const messages = await this.env.DB.prepare(`
+    SELECT * FROM messages
+    WHERE room=?
+    ORDER BY id ASC
+  `).bind(room).all()
+
+  this.send(server, {
+    type:"init_messages",
+    messages:messages.results || []
+  })
+
+  break
+}
         
         case "init_chats": {
 
@@ -138,31 +142,34 @@ export class ChatRoom {
 
   for(const m of (rows.results || [])){
 
-    const parts = m.room.split("_").map(x=>x.toLowerCase().trim())
+    if(!m.room.includes("||")) continue // skip data lama rusak
 
-    if(!parts.includes(email)) continue
+    const [a,b] = m.room.split("||").map(x=>x.toLowerCase().trim())
 
-    if(!map.has(m.room)){
-      map.set(m.room, m)
+    if(a !== email && b !== email) continue
+
+    const normalizedRoom = [a,b].sort().join("||")
+
+    if(!map.has(normalizedRoom)){
+      map.set(normalizedRoom, {
+        ...m,
+        room: normalizedRoom
+      })
     }
   }
 
   const result = await Promise.all(
     [...map.values()].map(async (m)=>{
 
-      const room = m.room
-
-      const friend = room
-        .split("_")
-        .map(x=>x.toLowerCase().trim())
-        .find(x=>x !== email)
+      const [u1,u2] = m.room.split("||")
+      const friend = u1 === email ? u2 : u1
 
       const user = await this.env.DB.prepare(`
         SELECT name, avatar FROM users WHERE email=?
       `).bind(friend).first()
 
       return {
-        room,
+        room: m.room,
         updated_at: m.created_at,
         friend_email: friend,
         friend_name: user?.name || friend,
@@ -191,35 +198,37 @@ export class ChatRoom {
         // ================= MESSAGE =================
         case "message": {
 
-          let [u1,u2]=data.room.split("_")
-          if(u1>u2)[u1,u2]=[u2,u1]
-          const room=u1+"_"+u2
+  let [u1,u2] = data.room.split("||").map(x=>x.toLowerCase().trim())
 
-          await this.env.DB.prepare(`
-            INSERT INTO messages
-            (room,sender,text,created_at,is_read)
-            VALUES(?,?,?,?,0)
-          `).bind(room,data.sender,data.text,now).run()
+  if(u1 > u2) [u1,u2] = [u2,u1]
 
-          const payload = {
-            type:"message",
-            room,
-            sender:data.sender,
-            text:data.text,
-            created_at:now
-          }
+  const room = u1 + "||" + u2
 
-          // 🔥 hanya ke subscriber
-          this.broadcastRoom(room, payload)
+  await this.env.DB.prepare(`
+    INSERT INTO messages
+    (room,sender,text,created_at,is_read)
+    VALUES(?,?,?,?,0)
+  `).bind(room,data.sender,data.text,now).run()
 
-          // 🔥 update chat list global
-          this.broadcastAll({
-            type:"chat_update",
-            ...payload
-          })
+  const payload = {
+    type:"message",
+    room,
+    sender:data.sender,
+    text:data.text,
+    created_at:now
+  }
 
-          break
-        }
+  // 🔥 ke subscriber
+  this.broadcastRoom(room, payload)
+
+  // 🔥 update list
+  this.broadcastAll({
+    type:"chat_update",
+    ...payload
+  })
+
+  break
+}
 
         // ================= TYPING =================
         case "typing": {
