@@ -229,6 +229,7 @@ export class ChatRoom {
             SELECT * FROM contact_requests WHERE id=?
           `).bind(data.id).first()
 
+          if(!req) break
           if(data.action === "accept"){
 
             await this.env.DB.prepare(`
@@ -241,10 +242,13 @@ export class ChatRoom {
               to:req.from_email,
               name:req.to_email
             })
-
+            
             this.broadcast({ type:"contact_update" })
+            this.broadcast({ type:"chat_update" })
+            this.broadcast({
+              type:"force_reload_contacts"
+            })
           }
-
           await this.env.DB.prepare(`
             DELETE FROM contact_requests WHERE id=?
           `).bind(data.id).run()
