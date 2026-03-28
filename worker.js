@@ -104,29 +104,32 @@ export class ChatRoom {
           await this.env.DB.prepare(`
             UPDATE users SET name=?, bio=?, avatar=? WHERE email=?
           `).bind(data.name,data.bio,data.avatar,data.email).run()
-
-          const payload = {
-            type:"profile_update",
-            user:{
-              email:data.email,
-              name:data.name,
-              bio:data.bio,
-              avatar:data.avatar
-            }
-          }
-
+          
           const global = this.env.CHAT_ROOM.get(
             this.env.CHAT_ROOM.idFromName("global")
           )
 
           await global.fetch(new Request("https://internal", {
-            method:"POST",
-            body: JSON.stringify(payload)
+              method:"POST",
+              body: JSON.stringify({
+              type:"profile_update",
+              user:{
+                email:data.email,
+                name:data.name,
+                bio:data.bio,
+                avatar:data.avatar
+              }
+            })
           }))
 
           await global.fetch(new Request("https://internal", {
             method:"POST",
             body: JSON.stringify({ type:"contact_update" })
+          }))
+          
+          await global.fetch(new Request("https://internal", {
+            method:"POST",
+            body: JSON.stringify({ type:"chat_update" })
           }))
 
           break
@@ -172,15 +175,17 @@ export class ChatRoom {
           break
 
         case "delete_contact": {
+          const user = data.user_email.toLowerCase().trim()
+          const friend = data.friend_email.toLowerCase().trim()
           await this.env.DB.prepare(`
             DELETE FROM contacts
             WHERE (user_email=? AND friend_email=?)
             OR (user_email=? AND friend_email=?)
           `).bind(
-            data.user_email,
-            data.friend_email,
-            data.friend_email,
-            data.user_email
+            user,
+            friend,
+            friend,
+            user
           ).run()
 
           const globalId = this.env.CHAT_ROOM.idFromName("global")
@@ -189,9 +194,9 @@ export class ChatRoom {
           await global.fetch(new Request("https://internal", {
               method:"POST",
               body: JSON.stringify({
-              type:"contact_update"
-            })
-          }))
+                type:"contact_update"
+              })
+            }))
 
           break // ✅ lebih aman & konsisten
         }
@@ -339,15 +344,17 @@ export class ChatRoom {
 
           // 🔥 CHAT PAGE
           this.broadcast(payload, room)
-
-          // 🔥 CHAT LIST (REALTIME)
-          this.broadcast({
-            type:"chat_update",
-            room,
-            sender:data.sender,
-            text:data.text,
-            created_at:now
-          })
+          const global = this.env.CHAT_ROOM.get(
+            this.env.CHAT_ROOM.idFromName("global")
+          )
+          
+          await global.fetch(new Request("https://internal", {
+              method:"POST",
+              body: JSON.stringify({
+                type:"chat_update",
+                ...payload
+              })
+            }))
 
           break
         }
@@ -399,18 +406,21 @@ export class ChatRoom {
             sender:data.sender
           }, data.room)
 
-          // chat list
-          this.broadcast({
-            type:"typing",
-            room:data.room,
-            sender:data.sender
-          })
-
+          const global = this.env.CHAT_ROOM.get(
+            this.env.CHAT_ROOM.idFromName("global")
+          )
+          
+          await global.fetch(new Request("https://internal", {
+              method:"POST",
+              body: JSON.stringify({
+              type:"typing",
+                room:data.room,
+                sender:data.sender
+              })
+            }))
           break
         }
-
       }
-
     })
 
     return new Response(null, {
