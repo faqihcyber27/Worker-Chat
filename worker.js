@@ -123,6 +123,65 @@ export class ChatRoom {
           })
           break
         }
+        
+        case "init_chats": {
+
+  const email = data.user
+
+  const dataChats = await this.env.DB.prepare(`
+    SELECT 
+      m1.room,
+      m1.created_at,
+      m1.text
+    FROM messages m1
+    INNER JOIN (
+      SELECT room, MAX(created_at) as max_date
+      FROM messages
+      GROUP BY room
+    ) m2
+    ON m1.room = m2.room AND m1.created_at = m2.max_date
+    WHERE m1.room LIKE '%' || ? || '%'
+    ORDER BY m1.created_at DESC
+  `).bind(email).all()
+
+  const result = await Promise.all(
+    (dataChats.results || []).map(async (c)=>{
+
+      const friend = c.room.split("_").find(x=>x !== email)
+
+      const user = await this.env.DB.prepare(`
+        SELECT name, avatar FROM users WHERE email=?
+      `).bind(friend).first()
+
+      return {
+        room: c.room,
+        updated_at: c.created_at,
+        friend_email: friend,
+        friend_name: user?.name || friend,
+        friend_avatar: user?.avatar || null,
+        last_message: c.text || "📎 File"
+      }
+    })
+  )
+
+  // 🔥 AUTO SUBSCRIBE SEMUA ROOM
+  result.forEach(c => {
+
+    if(!this.rooms.has(c.room)){
+      this.rooms.set(c.room, new Set())
+    }
+
+    this.rooms.get(c.room).add(server)
+  })
+
+  // 🔥 KIRIM KE CLIENT
+  this.send(server, {
+    type: "init_chats",
+    chats: result
+  })
+
+  break
+}
 
         // ================= MESSAGE =================
         case "message": {
