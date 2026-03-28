@@ -8,9 +8,9 @@ export class ChatRoom {
     this.typingThrottle = {}
   }
 
-  broadcast(payload, roomName = null) {
+  broadcast(payload, room = null) {
     for (const s of this.sessions) {
-      if ((!roomName || s.room === roomName) && s.readyState === 1) {
+      if ((!room || s.room === room) && s.readyState === 1) {
         try { s.send(JSON.stringify(payload)) } catch {}
       }
     }
@@ -18,7 +18,7 @@ export class ChatRoom {
 
   async fetch(request) {
 
-    // INTERNAL BROADCAST (KEEP)
+    // 🔥 INTERNAL BROADCAST
     if (request.method === "POST") {
       const data = await request.json()
       this.broadcast(data)
@@ -39,7 +39,7 @@ export class ChatRoom {
     server.room = roomName
     this.sessions.add(server)
 
-    // ================= DISCONNECT FIX =================
+    // 🔥 CLEAN DISCONNECT
     server.addEventListener("close", () => {
 
       this.sessions.delete(server)
@@ -53,7 +53,7 @@ export class ChatRoom {
 
       this.broadcast({
         type:"online_list",
-        users: Array.from(this.onlineUsers.keys())
+        users:Array.from(this.onlineUsers.keys())
       })
 
     })
@@ -70,10 +70,8 @@ export class ChatRoom {
 
           if(server.room !== "global") break
 
-          // 🔥 replace old session
           if(this.onlineUsers.has(data.user)){
-            const old = this.onlineUsers.get(data.user)
-            try { old.close() } catch {}
+            try { this.onlineUsers.get(data.user).close() } catch {}
           }
 
           this.onlineUsers.set(data.user, server)
@@ -86,33 +84,26 @@ export class ChatRoom {
           break
         }
 
-        // ================= GET PROFILE =================
+        // ================= PROFILE =================
         case "get_profile": {
 
           const user = await this.env.DB.prepare(`
             SELECT email,name,bio,avatar
-            FROM users
-            WHERE email=?
+            FROM users WHERE email=?
           `).bind(data.email).first()
 
           server.send(JSON.stringify({
             type:"profile_data",
             user
           }))
-
           break
         }
 
-        // ================= PROFILE UPDATE =================
         case "profile_update": {
 
           await this.env.DB.prepare(`
-            UPDATE users
-            SET name=?, bio=?, avatar=?
-            WHERE email=?
-          `)
-          .bind(data.name, data.bio, data.avatar, data.email)
-          .run()
+            UPDATE users SET name=?, bio=?, avatar=? WHERE email=?
+          `).bind(data.name,data.bio,data.avatar,data.email).run()
 
           const payload = {
             type:"profile_update",
@@ -138,15 +129,10 @@ export class ChatRoom {
             body: JSON.stringify({ type:"contact_update" })
           }))
 
-          await global.fetch(new Request("https://internal", {
-            method:"POST",
-            body: JSON.stringify({ type:"chat_update" })
-          }))
-
           break
         }
 
-        // ================= CONTACTS =================
+        // ================= CONTACT =================
         case "init_contacts": {
 
           const contacts = await this.env.DB.prepare(`
@@ -161,9 +147,7 @@ export class ChatRoom {
                   WHEN c.user_email = ? THEN c.friend_email
                   ELSE c.user_email
                 END as email,
-                u.name,
-                u.avatar,
-                u.bio
+                u.name,u.avatar,u.bio
               FROM contacts c
               JOIN users u 
               ON u.email = CASE 
@@ -173,22 +157,19 @@ export class ChatRoom {
               WHERE c.user_email = ? OR c.friend_email = ?
             )
             GROUP BY email
-          `)
-          .bind(data.user,data.user,data.user,data.user)
-          .all()
+          `).bind(data.user,data.user,data.user,data.user).all()
 
           server.send(JSON.stringify({
             type:"init_contacts",
-            contacts: contacts.results || []
+            contacts:contacts.results || []
           }))
 
           break
         }
 
-        case "contact_update": {
+        case "contact_update":
           this.broadcast({ type:"contact_update" })
           break
-        }
 
         case "delete_contact": {
 
@@ -207,6 +188,22 @@ export class ChatRoom {
           break
         }
 
+        // ================= REQUEST =================
+        case "init_requests": {
+
+          const req = await this.env.DB.prepare(`
+            SELECT * FROM contact_requests
+            WHERE to_email=?
+            ORDER BY id DESC
+          `).bind(data.user).all()
+
+          server.send(JSON.stringify({
+            type:"request_list",
+            data:req.results || []
+          }))
+          break
+        }
+
         case "send_request": {
 
           const result = await this.env.DB.prepare(`
@@ -217,7 +214,7 @@ export class ChatRoom {
           this.broadcast({
             type:"new_request",
             data:{
-              id: result.meta.last_row_id,
+              id:result.meta.last_row_id,
               from_email:data.from_email,
               to_email:data.to_email
             }
@@ -226,29 +223,55 @@ export class ChatRoom {
           break
         }
 
-        // ================= CHATS =================
+        case "respond_request": {
+
+          const req = await this.env.DB.prepare(`
+            SELECT * FROM contact_requests WHERE id=?
+          `).bind(data.id).first()
+
+          if(data.action === "accept"){
+
+            await this.env.DB.prepare(`
+              INSERT INTO contacts (user_email,friend_email)
+              VALUES (?,?)
+            `).bind(req.from_email,req.to_email).run()
+
+            this.broadcast({
+              type:"request_accepted",
+              to:req.from_email,
+              name:req.to_email
+            })
+
+            this.broadcast({ type:"contact_update" })
+          }
+
+          await this.env.DB.prepare(`
+            DELETE FROM contact_requests WHERE id=?
+          `).bind(data.id).run()
+
+          this.broadcast({
+            type:"request_update",
+            id:data.id
+          })
+
+          break
+        }
+
+        // ================= CHAT LIST =================
         case "init_chats": {
 
           const email = data.user
 
-          const dataChats = await this.env.DB.prepare(`
-            SELECT 
-              m1.room,
-              m1.created_at,
-              m1.text
-            FROM messages m1
-            INNER JOIN (
-              SELECT room, MAX(created_at) as max_date
-              FROM messages
-              GROUP BY room
-            ) m2
-            ON m1.room = m2.room AND m1.created_at = m2.max_date
-            WHERE m1.room LIKE '%' || ? || '%'
-            ORDER BY m1.created_at DESC
+          const chats = await this.env.DB.prepare(`
+            SELECT room, MAX(created_at) as updated_at
+            FROM messages
+            WHERE room LIKE '%' || ? || '%'
+            GROUP BY room
+            ORDER BY updated_at DESC
           `).bind(email).all()
 
           const result = await Promise.all(
-            dataChats.results.map(async (c)=>{
+            chats.results.map(async (c)=>{
 
               const friend = c.room.split("_").find(x=>x!==email)
 
@@ -258,18 +281,18 @@ export class ChatRoom {
 
               return {
                 room:c.room,
-                updated_at:c.created_at,
+                updated_at:c.updated_at,
                 friend_email:friend,
                 friend_name:user?.name || friend,
                 friend_avatar:user?.avatar || null,
-                last_message:c.text || "📎 File"
+                last_message:""
               }
             })
           )
 
           server.send(JSON.stringify({
             type:"init_chats",
-            chats: result
+            chats:result
           }))
 
           break
@@ -288,7 +311,7 @@ export class ChatRoom {
             VALUES(?,?,?,?,0)
           `).bind(room,data.sender,data.text,now).run()
 
-          const payload={
+          const payload = {
             type:"message",
             room,
             sender:data.sender,
@@ -296,23 +319,17 @@ export class ChatRoom {
             created_at:now
           }
 
+          // 🔥 CHAT PAGE
           this.broadcast(payload, room)
 
-          // 🔥 realtime chat list update
-          const global = this.env.CHAT_ROOM.get(
-            this.env.CHAT_ROOM.idFromName("global")
-          )
-
-          await global.fetch(new Request("https://internal", {
-            method:"POST",
-            body: JSON.stringify({
-              type:"chat_update_realtime",
-              room,
-              sender:data.sender,
-              text:data.text,
-              created_at:now
-            })
-          }))
+          // 🔥 CHAT LIST (REALTIME)
+          this.broadcast({
+            type:"chat_update",
+            room,
+            sender:data.sender,
+            text:data.text,
+            created_at:now
+          })
 
           break
         }
@@ -326,7 +343,7 @@ export class ChatRoom {
 
           server.send(JSON.stringify({
             type:"init_messages",
-            messages: messages.results || []
+            messages:messages.results || []
           }))
 
           break
@@ -357,11 +374,19 @@ export class ChatRoom {
           if(nowTs - last < 300) break
           this.typingThrottle[data.sender] = nowTs
 
+          // chat page
           this.broadcast({
             type:"typing",
             room:data.room,
             sender:data.sender
           }, data.room)
+
+          // chat list
+          this.broadcast({
+            type:"typing",
+            room:data.room,
+            sender:data.sender
+          })
 
           break
         }
@@ -383,7 +408,6 @@ export default {
 
     const url = new URL(request.url)
 
-    // ================= WS =================
     if (url.pathname === "/ws") {
       const room = url.searchParams.get("room")
       const id = env.CHAT_ROOM.idFromName(room)
