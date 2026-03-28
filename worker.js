@@ -336,6 +336,27 @@ case "typing": {
   break
 }
 
+case "delete_contact": {
+
+  await this.env.DB.prepare(`
+    DELETE FROM contacts
+    WHERE (user_email=? AND friend_email=?)
+       OR (user_email=? AND friend_email=?)
+  `).bind(
+    data.user_email,
+    data.friend_email,
+    data.friend_email,
+    data.user_email
+  ).run()
+
+  // 🔥 broadcast update ke semua user
+  this.broadcast({
+    type:"contact_update"
+  })
+
+  break
+}
+
       }
 
     })
