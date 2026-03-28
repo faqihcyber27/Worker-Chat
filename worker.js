@@ -642,6 +642,36 @@ if (url.pathname === "/login" && request.method === "POST") {
   return new Response("ok", { headers: cors() })
 }
 
+// ================= DELETE CHAT =================
+if (url.pathname === "/delete-chat" && request.method === "POST") {
+
+  const { room } = await request.json()
+
+  console.log("DELETE CHAT:", room)
+
+  // 🔥 hapus semua message di room
+  await env.DB.prepare(`
+    DELETE FROM messages WHERE room = ?
+  `).bind(room).run()
+
+  // 🔥 broadcast biar device lain ikut hilang
+  const globalRoom = env.CHAT_ROOM.get(
+    env.CHAT_ROOM.idFromName("global")
+  )
+
+  await globalRoom.fetch(new Request("https://internal", {
+    method:"POST",
+    body: JSON.stringify({
+      type:"chat_deleted",
+      room
+    })
+  }))
+
+  return new Response(JSON.stringify({ success:true }), {
+    headers: cors()
+  })
+}
+
     // ================= WS =================
     if (url.pathname === "/ws") {
       const room = url.searchParams.get("room")
