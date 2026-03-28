@@ -357,6 +357,32 @@ case "delete_contact": {
   break
 }
 
+case "send_request": {
+
+  const now = new Date().toISOString()
+
+  const result = await this.env.DB.prepare(`
+    INSERT INTO contact_requests (from_email,to_email,created_at)
+    VALUES (?,?,?)
+  `).bind(
+    data.from_email,
+    data.to_email,
+    now
+  ).run()
+
+  // 🔥 kirim ke semua (biar notif muncul di home)
+  this.broadcast({
+    type:"new_request",
+    data:{
+      id: result.meta.last_row_id,
+      from_email: data.from_email,
+      to_email: data.to_email
+    }
+  })
+
+  break
+}
+
       }
 
     })
