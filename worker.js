@@ -216,38 +216,46 @@ export class ChatRoom {
          // ================= FCM PUSH =================
 const accessToken = await getAccessToken(this.env)
 console.log("ACCESS TOKEN:", accessToken)
-const tokens = await this.env.DB.prepare(`
-  SELECT token FROM fcm_tokens
-`).all()
+const targetUser = (data.sender === u1) ? u2 : u1
+const isOnline = this.onlineUsers.has(targetUser)
+if(!isOnline){
 
-console.log("TOKENS:", tokens.results)
-for (const t of tokens.results) {
+  const tokens = await this.env.DB.prepare(`
+    SELECT token FROM fcm_tokens WHERE email=?
+  `).bind(targetUser).all()
 
-  const res = await fetch(
-    `https://fcm.googleapis.com/v1/projects/${this.env.FCM_PROJECT_ID}/messages:send`,
-    {
-      method: "POST",
-      headers: {
-        "Authorization": "Bearer " + accessToken,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        message: {
-          token: t.token,
-          notification: {
-            title: data.sender,
-            body: data.text || "📎 File"
+  console.log("TOKENS:", tokens.results)
+
+  for (const t of tokens.results) {
+
+    const res = await fetch(
+      `https://fcm.googleapis.com/v1/projects/${this.env.FCM_PROJECT_ID}/messages:send`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + accessToken,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          message: {
+            token: t.token,
+            notification: {
+              title: data.sender,
+              body: data.text || "📎 File"
+            }
           }
-        }
-      })
-    }
-  )
+        })
+      }
+    )
 
-  const text = await res.text()
-  console.log("FCM RESPONSE:", text)
-          
-          break
-        }
+    const text = await res.text()
+    console.log("FCM RESPONSE:", text)
+  }
+
+}
+}
+
+break
 
         case "contact_update": {
           this.broadcast({ type:"contact_update" })
