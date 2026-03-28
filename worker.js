@@ -172,11 +172,10 @@ export class ChatRoom {
           break
 
         case "delete_contact": {
-
           await this.env.DB.prepare(`
             DELETE FROM contacts
             WHERE (user_email=? AND friend_email=?)
-               OR (user_email=? AND friend_email=?)
+            OR (user_email=? AND friend_email=?)
           `).bind(
             data.user_email,
             data.friend_email,
@@ -184,8 +183,17 @@ export class ChatRoom {
             data.user_email
           ).run()
 
-          this.broadcast({ type:"contact_update" })
-          break
+          const globalId = this.env.CHAT_ROOM.idFromName("global")
+          const global = this.env.CHAT_ROOM.get(globalId)
+
+          await global.fetch(new Request("https://internal", {
+              method:"POST",
+              body: JSON.stringify({
+              type:"contact_update"
+            })
+          }))
+
+          break // ✅ lebih aman & konsisten
         }
 
         // ================= REQUEST =================
