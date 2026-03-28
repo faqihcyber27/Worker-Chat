@@ -128,33 +128,33 @@ export class ChatRoom {
 
   const email = data.user
 
-  // 🔥 ambil room yang mengandung user (lebih aman dari LIKE)
-  const dataChats = await this.env.DB.prepare(`
-    SELECT 
-      room,
-      MAX(created_at) as updated_at
+  // 🔥 ambil semua messages
+  const rows = await this.env.DB.prepare(`
+    SELECT room, text, created_at
     FROM messages
-    WHERE room LIKE ? OR room LIKE ?
-    GROUP BY room
-    ORDER BY updated_at DESC
-  `)
-  .bind(email + "_%", "%_" + email)
-  .all()
+    ORDER BY created_at DESC
+  `).all()
+
+  const map = new Map()
+
+  for(const m of (rows.results || [])){
+
+    const [u1,u2] = m.room.split("_")
+
+    // hanya ambil room milik user ini
+    if(u1 !== email && u2 !== email) continue
+
+    // ambil hanya latest per room
+    if(!map.has(m.room)){
+      map.set(m.room, m)
+    }
+  }
 
   const result = await Promise.all(
-    (dataChats.results || []).map(async (c)=>{
+    [...map.values()].map(async (m)=>{
 
-      const room = c.room
-      const friend = room.split("_").find(x => x !== email)
-
-      // 🔥 ambil last message
-      const lastMsg = await this.env.DB.prepare(`
-        SELECT text, created_at
-        FROM messages
-        WHERE room=?
-        ORDER BY created_at DESC
-        LIMIT 1
-      `).bind(room).first()
+      const room = m.room
+      const friend = room.split("_").find(x=>x!==email)
 
       const user = await this.env.DB.prepare(`
         SELECT name, avatar FROM users WHERE email=?
@@ -162,16 +162,16 @@ export class ChatRoom {
 
       return {
         room,
-        updated_at: lastMsg?.created_at || c.updated_at,
+        updated_at: m.created_at,
         friend_email: friend,
         friend_name: user?.name || friend,
         friend_avatar: user?.avatar || null,
-        last_message: lastMsg?.text || "📎 File"
+        last_message: m.text || "📎 File"
       }
     })
   )
 
-  // 🔥 AUTO SUBSCRIBE ROOM
+  // 🔥 AUTO SUBSCRIBE
   result.forEach(c => {
     if(!this.rooms.has(c.room)){
       this.rooms.set(c.room, new Set())
