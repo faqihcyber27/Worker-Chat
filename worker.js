@@ -213,6 +213,31 @@ export class ChatRoom {
               body:data.text || "📎 File"
             })
           }))
+          // ================= FCM PUSH =================
+const tokens = await this.env.DB.prepare(`
+  SELECT token FROM fcm_tokens
+`).all()
+
+for (const t of tokens.results) {
+  try {
+    await fetch("https://fcm.googleapis.com/fcm/send", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "BMicSwmyrhTRTPuFZO-S2pm3ymIZ43RT-KcnQnWw2Z0_TIwDPRLa1EZLPNiSiwkoKiDQxNt7cNJQD3f3iCCgwb0"
+      },
+      body: JSON.stringify({
+        to: t.token,
+        notification: {
+          title: data.sender,
+          body: data.text || "📎 File"
+        }
+      })
+    })
+  } catch(e){
+    console.log("FCM ERROR:", e)
+  }
+}
 
           break
         }
@@ -526,6 +551,18 @@ if (url.pathname === "/login" && request.method === "POST") {
       headers:{ "Content-Type":"application/json", ...cors() }
     })
   }
+  
+  if (url.pathname === "/save-token" && request.method === "POST") {
+
+  const { token, email } = await request.json()
+
+  await env.DB.prepare(`
+    INSERT INTO fcm_tokens (email, token)
+    VALUES (?, ?)
+  `).bind(email, token).run()
+
+  return new Response("ok", { headers: cors() })
+}
   
   if (url.pathname === "/sw.js") {
   return new Response(`
