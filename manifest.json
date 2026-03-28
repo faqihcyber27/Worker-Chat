@@ -1,0 +1,22 @@
+{
+  "name": "Realtime Chat",
+  "short_name": "Chat",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#7c3aed",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://ui-avatars.com/api/?name=Chat&background=7c3aed&color=fff",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://ui-avatars.com/api/?name=Chat&background=7c3aed&color=fff",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
