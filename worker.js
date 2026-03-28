@@ -527,6 +527,29 @@ if (url.pathname === "/login" && request.method === "POST") {
     })
   }
   
+  if (url.pathname === "/manifest.json") {
+  return new Response(JSON.stringify({
+    name: "Realtime Chat",
+    short_name: "Chat",
+    start_url: "/",
+    display: "standalone",
+    background_color: "#020617",
+    theme_color: "#7c3aed",
+    icons: [
+      {
+        src: "https://ui-avatars.com/api/?name=Chat",
+        sizes: "192x192",
+        type: "image/png"
+      }
+    ]
+  }), {
+    headers: {
+      "Content-Type": "application/json",
+      ...cors()
+    }
+  })
+}
+  
   if (url.pathname === "/subscribe" && request.method === "POST") {
 
   const sub = await request.json()
