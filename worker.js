@@ -215,14 +215,15 @@ export class ChatRoom {
           }))
          // ================= FCM PUSH =================
 const accessToken = await getAccessToken(this.env)
-
+console.log("ACCESS TOKEN:", accessToken)
 const tokens = await this.env.DB.prepare(`
   SELECT token FROM fcm_tokens
 `).all()
 
+console.log("TOKENS:", tokens.results)
 for (const t of tokens.results) {
 
-  await fetch(
+  const res = await fetch(
     `https://fcm.googleapis.com/v1/projects/${this.env.FCM_PROJECT_ID}/messages:send`,
     {
       method: "POST",
@@ -241,7 +242,9 @@ for (const t of tokens.results) {
       })
     }
   )
-}
+
+  const text = await res.text()
+  console.log("FCM RESPONSE:", text)
           
           break
         }
