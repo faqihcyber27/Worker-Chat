@@ -257,6 +257,7 @@ if(!isOnline){
 
 break
 
+
         case "contact_update": {
           this.broadcast({ type:"contact_update" })
           break
@@ -321,6 +322,19 @@ break
 
     break
   }
+case "typing": {
+
+  const payload = {
+    type:"typing",
+    room: data.room,
+    sender: data.sender
+  }
+
+  // 🔥 broadcast ke semua (global)
+  this.broadcast(payload)
+
+  break
+}
 
       }
 
