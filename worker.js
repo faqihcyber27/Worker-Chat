@@ -383,6 +383,22 @@ case "send_request": {
   break
 }
 
+case "get_profile": {
+
+  const user = await this.env.DB.prepare(`
+    SELECT email,name,bio,avatar
+    FROM users
+    WHERE email=?
+  `).bind(data.email).first()
+
+  server.send(JSON.stringify({
+    type:"profile_data",
+    user
+  }))
+
+  break
+}
+
       }
 
     })
