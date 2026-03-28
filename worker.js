@@ -415,6 +415,15 @@ export class ChatRoom {
 // ================= MAIN =================
 export default {
   async fetch(request, env) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "*"
+        }
+      })
+    }
 
     const url = new URL(request.url)
     
@@ -500,3 +509,12 @@ function json(data){
     }
   })
 }
+if (request.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "*"
+        }
+      })
+    }
