@@ -481,3 +481,22 @@ export default {
     return new Response("Not found", { status: 404 })
   }
 }
+
+// ================= HELPER =================
+async function hashPassword(password){
+  const enc = new TextEncoder()
+  const buffer = await crypto.subtle.digest("SHA-256", enc.encode(password))
+
+  return Array.from(new Uint8Array(buffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+function json(data){
+  return new Response(JSON.stringify(data), {
+    headers:{
+      "Content-Type":"application/json",
+      "Access-Control-Allow-Origin":"*"
+    }
+  })
+}
