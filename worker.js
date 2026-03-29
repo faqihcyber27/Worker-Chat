@@ -283,75 +283,94 @@ export class ChatRoom {
                 // ================= REQUEST =================
         case "init_requests": {
 
-          const req = await this.env.DB.prepare(`
-            SELECT * FROM contact_requests
-            WHERE to_email=?
-            ORDER BY id DESC
-          `).bind(data.user).all()
+  const email = data.user.toLowerCase().trim()
 
-          server.send(JSON.stringify({
-            type:"request_list",
-            data:req.results || []
-          }))
-          break
-        }
+  const req = await this.env.DB.prepare(`
+    SELECT id, from_email, to_email, created_at
+    FROM contact_requests
+    WHERE to_email=?
+    ORDER BY id DESC
+  `).bind(email).all()
+
+  // 🔥 kirim ke user ini saja
+  this.send(server, {
+    type:"request_list",
+    data: req.results || []
+  })
+
+  break
+}
 
         case "send_request": {
 
-          const result = await this.env.DB.prepare(`
-            INSERT INTO contact_requests (from_email,to_email,created_at)
-            VALUES (?,?,?)
-          `).bind(data.from_email,data.to_email,now).run()
+  const result = await this.env.DB.prepare(`
+    INSERT INTO contact_requests (from_email,to_email,created_at)
+    VALUES (?,?,?)
+  `).bind(data.from_email,data.to_email,now).run()
 
-          this.broadcast({
-            type:"new_request",
-            data:{
-              id:result.meta.last_row_id,
-              from_email:data.from_email,
-              to_email:data.to_email
-            }
-          })
+  const payload = {
+    type:"new_request",
+    data:{
+      id: result.meta.last_row_id,
+      from_email:data.from_email,
+      to_email:data.to_email
+    }
+  }
 
-          break
-        }
+  // 🔥 KIRIM HANYA KE TARGET
+  for(const [email, ws] of this.onlineUsers.entries()){
+    if(email === data.to_email){
+      this.send(ws, payload)
+    }
+  }
+
+  break
+}
 
         case "respond_request": {
 
-          const req = await this.env.DB.prepare(`
-            SELECT * FROM contact_requests WHERE id=?
-          `).bind(data.id).first()
+  const req = await this.env.DB.prepare(`
+    SELECT * FROM contact_requests WHERE id=?
+  `).bind(data.id).first()
 
-          if(!req) break
-          if(data.action === "accept"){
+  if(!req) break
 
-            await this.env.DB.prepare(`
-              INSERT INTO contacts (user_email,friend_email)
-              VALUES (?,?)
-            `).bind(req.from_email,req.to_email).run()
+  if(data.action === "accept"){
 
-            this.broadcast({
-              type:"request_accepted",
-              to:req.from_email,
-              name:req.to_email
-            })
-            
-            this.broadcast({ type:"contact_update" })
-            this.broadcast({ type:"chat_update" })
-            this.broadcast({
-              type:"force_reload_contacts"
-            })
-          }
-          await this.env.DB.prepare(`
-            DELETE FROM contact_requests WHERE id=?
-          `).bind(data.id).run()
+    await this.env.DB.prepare(`
+      INSERT INTO contacts (user_email,friend_email)
+      VALUES (?,?)
+    `).bind(req.from_email,req.to_email).run()
 
-          this.broadcast({
-            type:"request_update",
-            id:data.id
-          })
+    // 🔥 update ke kedua user saja
+    for(const [email, ws] of this.onlineUsers.entries()){
 
-          break
-        }
+      if(email === req.from_email || email === req.to_email){
+
+        this.send(ws, { type:"contact_update" })
+        this.send(ws, { type:"chat_update" })
+
+      }
+    }
+  }
+
+  // hapus request
+  await this.env.DB.prepare(`
+    DELETE FROM contact_requests WHERE id=?
+  `).bind(data.id).run()
+
+  // 🔥 hapus request realtime (ke dua user)
+  for(const [email, ws] of this.onlineUsers.entries()){
+    if(email === req.to_email || email === req.from_email){
+      this.send(ws, {
+        type:"request_update",
+        id:data.id
+      })
+    }
+  }
+
+  break
+}
 
         // ================= DELETE CONTACT =================
         case "delete_contact": {
