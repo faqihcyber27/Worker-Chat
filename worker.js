@@ -210,10 +210,10 @@ export class ChatRoom {
             ORDER BY id DESC
           `).bind(data.user).all()
 
-          server.send(JSON.stringify({
-            type:"request_list",
-            data:req.results || []
-          }))
+          this.send(server, {
+    type:"request_list",
+    data:req.results || []
+  })
           break
         }
 
