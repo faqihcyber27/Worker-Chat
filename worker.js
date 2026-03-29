@@ -279,6 +279,79 @@ export class ChatRoom {
           })
           break
         }
+        
+                // ================= REQUEST =================
+        case "init_requests": {
+
+          const req = await this.env.DB.prepare(`
+            SELECT * FROM contact_requests
+            WHERE to_email=?
+            ORDER BY id DESC
+          `).bind(data.user).all()
+
+          server.send(JSON.stringify({
+            type:"request_list",
+            data:req.results || []
+          }))
+          break
+        }
+
+        case "send_request": {
+
+          const result = await this.env.DB.prepare(`
+            INSERT INTO contact_requests (from_email,to_email,created_at)
+            VALUES (?,?,?)
+          `).bind(data.from_email,data.to_email,now).run()
+
+          this.broadcast({
+            type:"new_request",
+            data:{
+              id:result.meta.last_row_id,
+              from_email:data.from_email,
+              to_email:data.to_email
+            }
+          })
+
+          break
+        }
+
+        case "respond_request": {
+
+          const req = await this.env.DB.prepare(`
+            SELECT * FROM contact_requests WHERE id=?
+          `).bind(data.id).first()
+
+          if(!req) break
+          if(data.action === "accept"){
+
+            await this.env.DB.prepare(`
+              INSERT INTO contacts (user_email,friend_email)
+              VALUES (?,?)
+            `).bind(req.from_email,req.to_email).run()
+
+            this.broadcast({
+              type:"request_accepted",
+              to:req.from_email,
+              name:req.to_email
+            })
+            
+            this.broadcast({ type:"contact_update" })
+            this.broadcast({ type:"chat_update" })
+            this.broadcast({
+              type:"force_reload_contacts"
+            })
+          }
+          await this.env.DB.prepare(`
+            DELETE FROM contact_requests WHERE id=?
+          `).bind(data.id).run()
+
+          this.broadcast({
+            type:"request_update",
+            id:data.id
+          })
+
+          break
+        }
 
         // ================= DELETE CONTACT =================
         case "delete_contact": {
