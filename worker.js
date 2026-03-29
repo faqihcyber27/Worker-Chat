@@ -219,22 +219,41 @@ export class ChatRoom {
 
         case "send_request": {
 
-          const result = await this.env.DB.prepare(`
-            INSERT INTO contact_requests (from_email,to_email,created_at)
-            VALUES (?,?,?)
-          `).bind(data.from_email,data.to_email,now).run()
+  const from = data.from_email.toLowerCase().trim()
+  const to = data.to_email.toLowerCase().trim()
 
-          this.broadcast({
-            type:"new_request",
-            data:{
-              id:result.meta.last_row_id,
-              from_email:data.from_email,
-              to_email:data.to_email
-            }
-          })
+  // ❌ jangan kirim ke diri sendiri
+  if(from === to) break
 
-          break
-        }
+  // 🔥 hapus duplicate lama
+  await this.env.DB.prepare(`
+    DELETE FROM contact_requests
+    WHERE from_email=? AND to_email=?
+  `).bind(from,to).run()
+
+  const result = await this.env.DB.prepare(`
+    INSERT INTO contact_requests (from_email,to_email,created_at)
+    VALUES (?,?,?)
+  `).bind(from,to,new Date().toISOString()).run()
+
+  const payload = {
+    type:"new_request",
+    data:{
+      id: result.meta.last_row_id,
+      from_email: from,
+      to_email: to
+    }
+  }
+
+  // 🔥 kirim hanya ke target (user tujuan)
+  for(const [email, ws] of this.onlineUsers.entries()){
+    if(email === to){
+      this.send(ws, payload)
+    }
+  }
+
+  break
+}
 
         case "respond_request": {
 
