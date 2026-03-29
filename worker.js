@@ -3,25 +3,36 @@ export class ChatRoom {
   constructor(state, env) {
     this.state = state
     this.env = env
+
     this.sessions = new Set()
+    this.rooms = new Map() // 🔥 room subscription
     this.onlineUsers = new Map()
     this.typingThrottle = {}
   }
 
-  broadcast(payload, room = null) {
-    for (const s of this.sessions) {
-      if ((!room || s.room === room) && s.readyState === 1) {
-        try { s.send(JSON.stringify(payload)) } catch {}
-      }
+  send(ws, data){
+    try { ws.send(JSON.stringify(data)) } catch {}
+  }
+
+  broadcastAll(data){
+    for(const s of this.sessions){
+      if(s.readyState === 1) this.send(s, data)
+    }
+  }
+
+  broadcastRoom(room, data){
+    const clients = this.rooms.get(room) || new Set()
+    for(const ws of clients){
+      if(ws.readyState === 1) this.send(ws, data)
     }
   }
 
   async fetch(request) {
 
-    // 🔥 INTERNAL BROADCAST
+    // INTERNAL EVENT
     if (request.method === "POST") {
       const data = await request.json()
-      this.broadcast(data)
+      this.broadcastAll(data)
       return new Response("ok")
     }
 
@@ -32,18 +43,19 @@ export class ChatRoom {
     const pair = new WebSocketPair()
     const [client, server] = Object.values(pair)
 
-    const url = new URL(request.url)
-    const roomName = url.searchParams.get("room")
-
     server.accept()
-    server.room = roomName
     this.sessions.add(server)
 
-    // 🔥 CLEAN DISCONNECT
+    // DISCONNECT
     server.addEventListener("close", () => {
-
       this.sessions.delete(server)
 
+      // remove from rooms
+      for(const [room, set] of this.rooms){
+        set.delete(server)
+      }
+
+      // remove online
       for (const [email, ws] of this.onlineUsers.entries()) {
         if (ws === server) {
           this.onlineUsers.delete(email)
@@ -51,13 +63,13 @@ export class ChatRoom {
         }
       }
 
-      this.broadcast({
+      this.broadcastAll({
         type:"online_list",
-        users:Array.from(this.onlineUsers.keys())
+        users:[...this.onlineUsers.keys()]
       })
-
     })
 
+    // ================= MESSAGE =================
     server.addEventListener("message", async (event) => {
 
       const data = JSON.parse(event.data)
@@ -67,70 +79,170 @@ export class ChatRoom {
 
         // ================= ONLINE =================
         case "online": {
-
-          if(server.room !== "global") break
-
-          if(this.onlineUsers.has(data.user)){
-            try { this.onlineUsers.get(data.user).close() } catch {}
-          }
-
           this.onlineUsers.set(data.user, server)
 
-          this.broadcast({
+          this.broadcastAll({
             type:"online_list",
-            users:Array.from(this.onlineUsers.keys())
+            users:[...this.onlineUsers.keys()]
           })
+          break
+        }
+
+        // ================= SUBSCRIBE =================
+        case "subscribe": {
+          const room = data.room
+
+          if(!this.rooms.has(room)){
+            this.rooms.set(room, new Set())
+          }
+
+          this.rooms.get(room).add(server)
+          server.room = room
 
           break
         }
 
-        // ================= PROFILE =================
-        case "get_profile": {
-
-          const user = await this.env.DB.prepare(`
-            SELECT email,name,bio,avatar
-            FROM users WHERE email=?
-          `).bind(data.email).first()
-
-          server.send(JSON.stringify({
-            type:"profile_data",
-            user
-          }))
+        // ================= UNSUBSCRIBE =================
+        case "unsubscribe": {
+          const room = data.room
+          this.rooms.get(room)?.delete(server)
           break
         }
 
-        case "profile_update": {
+        // ================= INIT MESSAGES =================
+        case "init_messages": {
 
-          await this.env.DB.prepare(`
-            UPDATE users SET name=?, bio=?, avatar=? WHERE email=?
-          `).bind(data.name,data.bio,data.avatar,data.email).run()
-          
-          const global = this.env.CHAT_ROOM.get(
-            this.env.CHAT_ROOM.idFromName("global")
-          )
+  const room = data.room
 
-          await global.fetch(new Request("https://internal", {
-              method:"POST",
-              body: JSON.stringify({
-              type:"profile_update",
-              user:{
-                email:data.email,
-                name:data.name,
-                bio:data.bio,
-                avatar:data.avatar
-              }
-            })
-          }))
+  const messages = await this.env.DB.prepare(`
+    SELECT * FROM messages
+    WHERE room=?
+    ORDER BY id ASC
+  `).bind(room).all()
 
-          await global.fetch(new Request("https://internal", {
-            method:"POST",
-            body: JSON.stringify({ type:"contact_update" })
-          }))
-          
-          await global.fetch(new Request("https://internal", {
-            method:"POST",
-            body: JSON.stringify({ type:"chat_update" })
-          }))
+  this.send(server, {
+    type:"init_messages",
+    messages:messages.results || []
+  })
+
+  break
+}
+        
+        case "init_chats": {
+
+  const email = data.user.toLowerCase().trim()
+
+  const rows = await this.env.DB.prepare(`
+    SELECT room, text, created_at
+    FROM messages
+    ORDER BY created_at DESC
+  `).all()
+
+  const map = new Map()
+
+  for(const m of (rows.results || [])){
+
+    if(!m.room.includes("||")) continue // skip data lama rusak
+
+    const [a,b] = m.room.split("||").map(x=>x.toLowerCase().trim())
+
+    if(a !== email && b !== email) continue
+
+    const normalizedRoom = [a,b].sort().join("||")
+
+    if(!map.has(normalizedRoom)){
+      map.set(normalizedRoom, {
+        ...m,
+        room: normalizedRoom
+      })
+    }
+  }
+
+  const result = await Promise.all(
+    [...map.values()].map(async (m)=>{
+
+      const [u1,u2] = m.room.split("||")
+      const friend = u1 === email ? u2 : u1
+
+      const user = await this.env.DB.prepare(`
+        SELECT name, avatar FROM users WHERE email=?
+      `).bind(friend).first()
+
+      return {
+        room: m.room,
+        updated_at: m.created_at,
+        friend_email: friend,
+        friend_name: user?.name || friend,
+        friend_avatar: user?.avatar || null,
+        last_message: m.text || "📎 File"
+      }
+    })
+  )
+
+  // 🔥 AUTO SUBSCRIBE
+  result.forEach(c => {
+    if(!this.rooms.has(c.room)){
+      this.rooms.set(c.room, new Set())
+    }
+    this.rooms.get(c.room).add(server)
+  })
+
+  this.send(server, {
+    type:"init_chats",
+    chats: result
+  })
+
+  break
+}
+
+        // ================= MESSAGE =================
+        case "message": {
+
+  let [u1,u2] = data.room.split("||").map(x=>x.toLowerCase().trim())
+
+  if(u1 > u2) [u1,u2] = [u2,u1]
+
+  const room = u1 + "||" + u2
+
+  await this.env.DB.prepare(`
+    INSERT INTO messages
+    (room,sender,text,created_at,is_read)
+    VALUES(?,?,?,?,0)
+  `).bind(room,data.sender,data.text,now).run()
+
+  const payload = {
+    type:"message",
+    room,
+    sender:data.sender,
+    text:data.text,
+    created_at:now
+  }
+
+  // 🔥 ke subscriber
+  this.broadcastRoom(room, payload)
+
+  // 🔥 update list
+  this.broadcastAll({
+    type:"chat_update",
+    ...payload
+  })
+
+  break
+}
+
+        // ================= TYPING =================
+        case "typing": {
+
+          const nowTs = Date.now()
+          const last = this.typingThrottle[data.sender] || 0
+          if(nowTs - last < 300) break
+          this.typingThrottle[data.sender] = nowTs
+
+          this.broadcastRoom(data.room, {
+            type:"typing",
+            room:data.room,
+            sender:data.sender
+          })
 
           break
         }
@@ -142,15 +254,14 @@ export class ChatRoom {
             SELECT 
               email,
               MAX(name) as name,
-              MAX(avatar) as avatar,
-              MAX(bio) as bio
+              MAX(avatar) as avatar
             FROM (
               SELECT 
                 CASE 
                   WHEN c.user_email = ? THEN c.friend_email
                   ELSE c.user_email
                 END as email,
-                u.name,u.avatar,u.bio
+                u.name,u.avatar
               FROM contacts c
               JOIN users u 
               ON u.email = CASE 
@@ -162,296 +273,119 @@ export class ChatRoom {
             GROUP BY email
           `).bind(data.user,data.user,data.user,data.user).all()
 
-          server.send(JSON.stringify({
+          this.send(server, {
             type:"init_contacts",
             contacts:contacts.results || []
-          }))
-
+          })
           break
         }
-
-        case "contact_update":
-          this.broadcast({ type:"contact_update" })
-          break
-
-        case "delete_contact": {
-          const user = data.user_email.toLowerCase().trim()
-          const friend = data.friend_email.toLowerCase().trim()
-          await this.env.DB.prepare(`
-            DELETE FROM contacts
-            WHERE (user_email=? AND friend_email=?)
-            OR (user_email=? AND friend_email=?)
-          `).bind(
-            user,
-            friend,
-            friend,
-            user
-          ).run()
-
-          const globalId = this.env.CHAT_ROOM.idFromName("global")
-          const global = this.env.CHAT_ROOM.get(globalId)
-
-          await global.fetch(new Request("https://internal", {
-              method:"POST",
-              body: JSON.stringify({
-                type:"contact_update"
-              })
-            }))
-
-          break // ✅ lebih aman & konsisten
-        }
-
+        
         // ================= REQUEST =================
         case "init_requests": {
-
           const req = await this.env.DB.prepare(`
             SELECT * FROM contact_requests
             WHERE to_email=?
             ORDER BY id DESC
           `).bind(data.user).all()
 
-          this.send(server, {
-    type:"request_list",
-    data:req.results || []
-  })
+          server.send(JSON.stringify({
+            type:"request_list",
+            data:req.results || []
+          }))
           break
         }
 
         case "send_request": {
 
-  const from = data.from_email.toLowerCase().trim()
-  const to = data.to_email.toLowerCase().trim()
+          const result = await this.env.DB.prepare(`
+            INSERT INTO contact_requests (from_email,to_email,created_at)
+            VALUES (?,?,?)
+          `).bind(data.from_email,data.to_email,now).run()
 
-  // ❌ jangan kirim ke diri sendiri
-  if(from === to) break
+          this.broadcast({
+            type:"new_request",
+            data:{
+              id:result.meta.last_row_id,
+              from_email:data.from_email,
+              to_email:data.to_email
+            }
+          })
 
-  // 🔥 hapus duplicate lama
-  await this.env.DB.prepare(`
-    DELETE FROM contact_requests
-    WHERE from_email=? AND to_email=?
-  `).bind(from,to).run()
-
-  const result = await this.env.DB.prepare(`
-    INSERT INTO contact_requests (from_email,to_email,created_at)
-    VALUES (?,?,?)
-  `).bind(from,to,new Date().toISOString()).run()
-
-  const payload = {
-    type:"new_request",
-    data:{
-      id: result.meta.last_row_id,
-      from_email: from,
-      to_email: to
-    }
-  }
-
-  // 🔥 kirim hanya ke target (user tujuan)
-  for(const [email, ws] of this.onlineUsers.entries()){
-    if(email === to){
-      this.send(ws, payload)
-    }
-  }
-
-  break
-}
+          break
+        }
 
         case "respond_request": {
 
-  const req = await this.env.DB.prepare(`
-    SELECT * FROM contact_requests WHERE id=?
-  `).bind(data.id).first()
+          const req = await this.env.DB.prepare(`
+            SELECT * FROM contact_requests WHERE id=?
+          `).bind(data.id).first()
 
-  if(!req) break
+          if(!req) break
+          if(data.action === "accept"){
 
-  if(data.action === "accept"){
+            await this.env.DB.prepare(`
+              INSERT INTO contacts (user_email,friend_email)
+              VALUES (?,?)
+            `).bind(req.from_email,req.to_email).run()
 
-    await this.env.DB.prepare(`
-      INSERT INTO contacts (user_email,friend_email)
-      VALUES (?,?)
-    `).bind(req.from_email,req.to_email).run()
-
-    // 🔥 KIRIM KE KEDUA USER (INI YANG KAMU TANYA)
-    for(const [email, ws] of this.onlineUsers.entries()){
-
-      if(email === req.from_email || email === req.to_email){
-
-        this.send(ws,{
-          type:"request_accepted",
-          from:req.from_email,
-          to:req.to_email
-        })
-
-        this.send(ws,{ type:"contact_update" })
-        this.send(ws,{ type:"chat_update" })
-      }
-    }
-  }
-
-  // 🔥 DELETE REQUEST
-  await this.env.DB.prepare(`
-    DELETE FROM contact_requests WHERE id=?
-  `).bind(data.id).run()
-
-  // 🔥 UPDATE REQUEST LIST REALTIME
-  for(const [email, ws] of this.onlineUsers.entries()){
-    if(email === req.from_email || email === req.to_email){
-      this.send(ws,{
-        type:"request_update",
-        id:data.id
-      })
-    }
-  }
-
-  break
-}
-
-        // ================= CHAT LIST =================
-        case "init_chats": {
-          const email = data.user
-          const dataChats = await this.env.DB.prepare(`
-            SELECT 
-              m1.room,
-              m1.created_at,
-              m1.text
-            FROM messages m1
-            INNER JOIN (
-            SELECT room, MAX(created_at) as max_date
-            FROM messages
-            GROUP BY room
-            ) m2
-            ON m1.room = m2.room AND m1.created_at = m2.max_date
-            WHERE m1.room LIKE '%' || ? || '%'
-            ORDER BY m1.created_at DESC
-            `).bind(email).all()
-
-          const result = await Promise.all(
-          dataChats.results.map(async (c)=>{
-
-          const friend = c.room.split("_").find(x=>x!==email)
-
-          const user = await this.env.DB.prepare(`
-            SELECT name,avatar FROM users WHERE email=?
-          `).bind(friend).first()
-
-          return {
-            room:c.room,
-            updated_at:c.created_at,
-            friend_email:friend,
-            friend_name:user?.name || friend,
-            friend_avatar:user?.avatar || null,
-            last_message:c.text || "📎 File"
+            this.broadcast({
+              type:"request_accepted",
+              to:req.from_email,
+              name:req.to_email
+            })
+            
+            this.broadcast({ type:"contact_update" })
+            this.broadcast({ type:"chat_update" })
+            this.broadcast({
+              type:"force_reload_contacts"
+            })
           }
-        })
-      )
-
-      server.send(JSON.stringify({
-        type:"init_chats",
-        chats:result
-      }))
-
-      break
-    }
-
-        // ================= MESSAGE =================
-        case "message": {
-
-          let [u1,u2]=data.room.split("_")
-          if(u1>u2)[u1,u2]=[u2,u1]
-          const room=u1+"_"+u2
-
           await this.env.DB.prepare(`
-            INSERT INTO messages
-            (room,sender,text,created_at,is_read)
-            VALUES(?,?,?,?,0)
-          `).bind(room,data.sender,data.text,now).run()
-
-          const payload = {
-            type:"message",
-            room,
-            sender:data.sender,
-            text:data.text,
-            created_at:now
-          }
-
-          // 🔥 CHAT PAGE
-          this.broadcast(payload, room)
-          const global = this.env.CHAT_ROOM.get(
-            this.env.CHAT_ROOM.idFromName("global")
-          )
-          
-          await global.fetch(new Request("https://internal", {
-              method:"POST",
-              body: JSON.stringify({
-                type:"chat_update",
-                ...payload
-              })
-            }))
-
-          break
-        }
-
-        // ================= MESSAGES =================
-        case "init_messages": {
-
-          const messages = await this.env.DB.prepare(`
-            SELECT * FROM messages WHERE room=? ORDER BY id ASC
-          `).bind(data.room).all()
-
-          server.send(JSON.stringify({
-            type:"init_messages",
-            messages:messages.results || []
-          }))
-
-          break
-        }
-
-        // ================= READ =================
-        case "read": {
-
-          await this.env.DB.prepare(`
-            UPDATE messages
-            SET is_read=1
-            WHERE room=? AND sender!=?
-          `).bind(data.room,data.user).run()
+            DELETE FROM contact_requests WHERE id=?
+          `).bind(data.id).run()
 
           this.broadcast({
-            type:"read_update",
-            room:data.room
-          }, data.room)
+            type:"request_update",
+            id:data.id
+          })
 
           break
         }
 
-        // ================= TYPING =================
-        case "typing": {
+        // ================= DELETE CONTACT =================
+        case "delete_contact": {
 
-          const nowTs = Date.now()
-          const last = this.typingThrottle[data.sender] || 0
-          if(nowTs - last < 300) break
-          this.typingThrottle[data.sender] = nowTs
+          const user = data.user_email.toLowerCase().trim()
+          const friend = data.friend_email.toLowerCase().trim()
 
-          // chat page
-          this.broadcast({
-            type:"typing",
-            room:data.room,
-            sender:data.sender
-          }, data.room)
+          await this.env.DB.prepare(`
+            DELETE FROM contacts
+            WHERE (user_email=? AND friend_email=?)
+            OR (user_email=? AND friend_email=?)
+          `).bind(user,friend,friend,user).run()
 
-          const global = this.env.CHAT_ROOM.get(
-            this.env.CHAT_ROOM.idFromName("global")
-          )
-          
-          await global.fetch(new Request("https://internal", {
-              method:"POST",
-              body: JSON.stringify({
-              type:"typing",
-                room:data.room,
-                sender:data.sender
-              })
-            }))
+          this.broadcastAll({ type:"contact_update" })
+
           break
         }
+
+        // ================= PROFILE =================
+        case "profile_update": {
+
+          await this.env.DB.prepare(`
+            UPDATE users SET name=?, bio=?, avatar=? WHERE email=?
+          `).bind(data.name,data.bio,data.avatar,data.email).run()
+
+          this.broadcastAll({
+            type:"profile_update",
+            user:data
+          })
+
+          break
+        }
+
       }
+
     })
 
     return new Response(null, {
@@ -541,6 +475,7 @@ export default {
 }
 
 // ================= HELPER =================
+
 async function hashPassword(password){
   const enc = new TextEncoder()
   const buffer = await crypto.subtle.digest("SHA-256", enc.encode(password))
